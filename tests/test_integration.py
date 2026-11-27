@@ -50,18 +50,68 @@ class MemoryIntegrationTest(unittest.TestCase):
         topic = "관측 결과"
         self.run_cli("학습", topic, "맑음", "관측소", "구름이 없었다.")
         duplicate = self.run_cli(
-            "학습", topic, "흐림", "  관측소  ", "새 관측", expected_status=1
+            "학습", topic, "맑음", "  관측소  ", "구름이 없었다.", expected_status=1
         )
-        self.assertIn("이미 등록된 출처", duplicate.stderr)
+        self.assertIn("최신 기록과 같은 증거", duplicate.stderr)
         invalid = self.run_cli("학습", topic, "흐림", "다른 관측소", " ", expected_status=1)
         self.assertIn("증거", invalid.stderr)
         with sqlite3.connect(self.database) as connection:
-            for query in ("UPDATE evidence SET value = '흐림'", "DELETE FROM evidence"):
+            for query in (
+                "UPDATE evidence SET value = '흐림'",
+                "DELETE FROM evidence",
+                """INSERT OR REPLACE INTO evidence (id, topic, value, source, note)
+                   VALUES (1, '관측 결과', '흐림', '관측소', '교체 시도')""",
+            ):
                 with self.assertRaisesRegex(sqlite3.IntegrityError, "잠긴 증거"):
                     connection.execute(query)
         history = self.run_cli("기록", topic).stdout
         self.assertEqual(len(history.splitlines()), 1)
         self.assertIn("맑음", history)
+
+
+    def test_source_correction_uses_only_latest_evidence(self):
+        topic = "관측 결과"
+        self.run_cli("학습", topic, "맑음", "관측소", "첫 보고")
+        self.run_cli("학습", topic, "맑음", "관측소", "추가 확인")
+        self.run_cli("학습", topic, "흐림", "다른 관측소", "별도 관측")
+        self.assertIn("판단 보류", self.run_cli("판단", topic).stdout)
+        self.run_cli("학습", topic, "흐림", "관측소", "정정 보고")
+        judgment = self.run_cli("판단", topic).stdout
+        self.assertIn("잠정 판단 — 흐림", judgment)
+        self.assertIn("흐림 (출처 2개)", judgment)
+        self.assertNotIn("맑음", judgment)
+        self.assertEqual(len(self.run_cli("기록", topic).stdout.splitlines()), 4)
+
+    def test_opening_legacy_memory_preserves_evidence_and_lock(self):
+        with sqlite3.connect(self.database) as connection:
+            connection.executescript("""
+                CREATE TABLE evidence (
+                    id INTEGER PRIMARY KEY,
+                    topic TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    note TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (topic, source)
+                );
+                CREATE TRIGGER lock_evidence_update BEFORE UPDATE ON evidence
+                BEGIN
+                    SELECT RAISE(ABORT, '잠긴 증거');
+                END;
+                CREATE TRIGGER lock_evidence_delete BEFORE DELETE ON evidence
+                BEGIN
+                    SELECT RAISE(ABORT, '잠긴 증거');
+                END;
+                INSERT INTO evidence VALUES
+                    (7, '관측 결과', '맑음', '관측소', '첫 보고', '2026-11-27 00:00:00');
+            """)
+        self.run_cli("학습", "관측 결과", "흐림", "관측소", "정정 보고")
+        history = self.run_cli("기록", "관측 결과").stdout
+        self.assertIn("7. 맑음 | 관측소 | 첫 보고 | 2026-11-27 00:00:00 UTC", history)
+        self.assertIn("8. 흐림 | 관측소 | 정정 보고", history)
+        with sqlite3.connect(self.database) as connection:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "잠긴 증거"):
+                connection.execute("DELETE FROM evidence")
 
 
 if __name__ == "__main__":
