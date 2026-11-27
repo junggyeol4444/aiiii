@@ -2,6 +2,7 @@ import argparse
 import sqlite3
 
 from .memory import Memory
+from .research import display_text, find_passages
 
 
 def main():
@@ -16,7 +17,8 @@ def main():
         ("기록", "저장된 증거 전체 조회"),
     ):
         commands.add_parser(name, help=description).add_argument("주제")
-    commands.add_parser("탐구", help="기억을 검토해 다음 탐구 주제 선택")
+    explore = commands.add_parser("탐구", help="다음 탐구 주제를 선택하고 지정한 자료 조사")
+    explore.add_argument("--자료", dest="documents", action="append", default=[], metavar="파일")
     args = parser.parse_args()
     memory = Memory(args.database)
     try:
@@ -51,16 +53,23 @@ def main():
                         f"‘{other}’ {other_votes}개로 의견이 갈립니다."
                     )
                     question = f"‘{leading}’과(와) ‘{other}’을(를) 구분할 증거는 무엇인가요?"
+                passages = find_passages(topic, args.documents)
                 print(f"다음 탐구 주제 — {topic}")
                 print(f"선택 이유 — {reason}")
                 print(f"확인할 질문 — {question}")
+                if args.documents and not passages:
+                    print("지정한 자료에서 주제와 일치하는 구절을 찾지 못했습니다.")
+                for passage in passages:
+                    print(f"증거 후보 — {display_text(str(passage.path))}:{passage.line_number}")
+                    print(f"  인용 — {passage.text}")
+                    print(f"  파일 SHA-256 — {passage.sha256}")
         else:
             records = memory.history(args.주제)
             if not records:
                 print("저장된 증거가 없습니다.")
             for entry, value, source, note, timestamp in records:
                 print(f"{entry}. {value} | {source} | {note} | {timestamp} UTC")
-    except (ValueError, sqlite3.Error) as error:
+    except (ValueError, OSError, sqlite3.Error) as error:
         parser.exit(1, f"오류 — {error}\n")
 
 
