@@ -1,8 +1,8 @@
 import argparse
 import sqlite3
 
-from .memory import Memory
-from .research import display_text, find_passages
+from .memory import Memory, normalize
+from .research import display_text, find_passages, verify_passage
 
 
 def main():
@@ -19,6 +19,11 @@ def main():
         commands.add_parser(name, help=description).add_argument("주제")
     explore = commands.add_parser("탐구", help="다음 탐구 주제를 선택하고 지정한 자료 조사")
     explore.add_argument("--자료", dest="documents", action="append", default=[], metavar="파일")
+    cite = commands.add_parser("인용학습", help="원본을 재확인한 구절을 증거로 통합")
+    for label in ("주제", "주장", "출처", "파일"):
+        cite.add_argument(label)
+    cite.add_argument("줄번호", type=int)
+    cite.add_argument("sha256", metavar="SHA-256")
     args = parser.parse_args()
     memory = Memory(args.database)
     try:
@@ -26,6 +31,15 @@ def main():
         if args.command == "학습":
             entry = memory.learn(args.주제, args.주장, args.출처, args.증거)
             print(f"검사 통과. 증거 {entry}번을 통합하고 잠갔습니다.")
+        elif args.command == "인용학습":
+            topic = normalize(args.주제, "주제", 200)
+            passage = verify_passage(topic, args.파일, args.줄번호, args.sha256)
+            note = (
+                f"{passage.text} [파일 {str(passage.path)!r}, "
+                f"줄 {passage.line_number}, SHA-256 {passage.sha256}]"
+            )
+            entry = memory.learn(topic, args.주장, args.출처, note)
+            print(f"원본 검사 통과. 증거 {entry}번을 통합하고 잠갔습니다.")
         elif args.command == "판단":
             results = memory.assess(args.주제)
             if not results:

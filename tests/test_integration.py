@@ -180,6 +180,35 @@ class MemoryIntegrationTest(unittest.TestCase):
         self.assertIn("UTF-8 문서를 지정해야 합니다", result.stderr)
         self.assertEqual(result.stdout, "")
 
+    def test_verified_citation_integrates_only_matching_source_snapshot(self):
+        topic = "공원 운영"
+        self.run_cli("학습", topic, "개방", "현장 관찰", "첫 방문")
+        document = self.database.with_name("공지.txt")
+        original = "제목\n공원 운영은 야간에 중단된다.\n"
+        document.write_text(original, encoding="utf-8")
+
+        research = self.run_cli("탐구", "--자료", str(document)).stdout
+        digest = research.split("파일 SHA-256 — ", 1)[1].strip()
+        citation = ("인용학습", topic, "폐쇄", "관리소", str(document))
+        wrong_line = self.run_cli(*citation, "1", digest, expected_status=1)
+        self.assertIn("주제 문구를 찾지 못했습니다", wrong_line.stderr)
+
+        document.write_text(original.replace("야간", "주간"), encoding="utf-8")
+        stale = self.run_cli(*citation, "2", digest, expected_status=1)
+        self.assertIn("SHA-256이 검색 결과와 다릅니다", stale.stderr)
+        self.assertIn("잠정 판단 — 개방", self.run_cli("판단", topic).stdout)
+        self.assertEqual(len(self.run_cli("기록", topic).stdout.splitlines()), 1)
+
+        document.write_text(original, encoding="utf-8")
+        saved = self.run_cli(*citation, "2", digest)
+        self.assertIn("원본 검사 통과", saved.stdout)
+        document.unlink()
+        self.assertIn("판단 보류", self.run_cli("판단", topic).stdout)
+        history = self.run_cli("기록", topic).stdout
+        self.assertIn("공원 운영은 야간에 중단된다.", history)
+        self.assertIn(f"줄 2, SHA-256 {digest}", history)
+        self.assertIn("개방 | 현장 관찰", history)
+
 
 if __name__ == "__main__":
     unittest.main()
