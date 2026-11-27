@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -172,6 +173,17 @@ class TestProgramIntegrationTest(ProgramIntegrationCase):
         options = ("--계속",) if continuous else ()
         return self.run_cli("자율학습", "--자료", str(document), *options, expected_status=expected_status)
 
+    def learn_text_observations(self, *observations):
+        document = self.workspace / "관측.txt"
+        document.write_text(
+            "\n\n".join(
+                f"주제: {topic}\n출처: {source}\n관측: {sentence}"
+                for topic, source, sentence in observations
+            ) + "\n",
+            encoding="utf-8",
+        )
+        return self.run_cli("자율학습", "--자료", str(document), "--계속")
+
     def test_autonomous_learning_selects_one_topic_by_distinct_sources_then_name(self):
         park = "가로수길 공원 운영"
         trail = "나루 산책로 운영"
@@ -189,6 +201,19 @@ class TestProgramIntegrationTest(ProgramIntegrationCase):
         self.assertEqual(len(self.run_cli("기록", park).stdout.splitlines()), 2)
         for topic in (trail, garden):
             self.assertIn("저장된 증거가 없습니다", self.run_cli("기록", topic).stdout)
+
+    def test_autonomous_learning_counts_distinct_sources_across_concept_relations(self):
+        concept = "가로수"
+        topic = "나루터 운영"
+        self.learn_observations(
+            (concept, "나무의 한 종류", "분류 기록", "가로수는 나무의 한 종류입니다."),
+            (concept, "식물의 한 종류", "분류 기록", "가로수는 식물의 한 종류입니다."),
+            (concept, "거리 경관의 일부", "분류 기록", "가로수는 거리 경관의 일부입니다."),
+            (topic, "중단", "운영 공지", "오늘 운영을 중단한다는 공지가 있다."),
+            (topic, "중단", "현장 관찰", "탑승 안내소가 닫혔다."),
+        )
+        self.assertIn("중단 (출처 2개)", self.run_cli("판단", topic).stdout)
+        self.assertIn("저장된 증거가 없습니다", self.run_cli("기록", concept).stdout)
 
     def test_autonomous_learning_follows_exploration_rank_for_uncertain_topics(self):
         tie = "공원의 야간 개방"
@@ -504,6 +529,77 @@ class TestProgramIntegrationTest(ProgramIntegrationCase):
         verification = self.run_cli("검증", topic, "개방").stdout
         self.assertIn("지지 0건", verification)
         self.assertIn("명시적 반박 2건", verification)
+
+    def test_concept_classification_infers_path_with_evidence_for_each_hop(self):
+        self.learn_text_observations(
+            ("참새", "조류 기록", "참새는 새의 한 종류입니다."),
+            ("새", "동물 분류", "새는 동물의 한 종류입니다."),
+        )
+        concept = self.run_cli("개념", "참새").stdout
+        self.assertIn("- 종류 → 새 (지지 1건 · 명시적 반박 0건)", concept)
+
+        first = self.run_cli("관계", "참새", "종류", "새").stdout
+        second = self.run_cli("관계", "새", "종류", "동물").stdout
+        self.assertIn("직접 근거 — 참새 → 새", first)
+        self.assertIn("직접 근거 — 새 → 동물", second)
+        first_ids = re.findall(r"증거 #(\d+)", first)
+        second_ids = re.findall(r"증거 #(\d+)", second)
+        self.assertEqual(len(first_ids), 1)
+        self.assertEqual(len(second_ids), 1)
+        self.assertNotEqual(first_ids, second_ids)
+
+        inferred = self.run_cli("관계", "참새", "종류", "동물").stdout
+        self.assertIn("추론 경로 — 참새 → 새 → 동물", inferred)
+        self.assertEqual(re.findall(r"증거 #(\d+)", inferred), first_ids + second_ids)
+
+    def test_concept_inference_rejects_refuted_direct_or_intermediate_links(self):
+        self.learn_text_observations(
+            ("참새", "분류 기록", "참새는 새의 한 종류입니다."),
+            ("새", "분류 기록", "새는 동물의 한 종류입니다."),
+            ("새", "이의 기록", "새는 동물의 한 종류가 아닙니다."),
+        )
+        blocked = self.run_cli("관계", "참새", "종류", "동물").stdout
+        self.assertIn("관계 근거가 부족합니다", blocked)
+
+        self.learn_text_observations(("새", "이의 기록", "새는 동물의 한 종류입니다."))
+        supported = self.run_cli("관계", "참새", "종류", "동물").stdout
+        self.assertIn("추론 경로 — 참새 → 새 → 동물", supported)
+        self.learn_text_observations(("참새", "이의 기록", "참새는 동물의 한 종류가 아닙니다."))
+        refuted = self.run_cli("관계", "참새", "종류", "동물").stdout
+        self.assertIn("명시적 반박이 있습니다", refuted)
+        self.assertNotIn("추론 경로", refuted)
+
+    def test_concept_inference_does_not_chain_parts_or_return_reflexive_cycles(self):
+        self.learn_text_observations(
+            ("나사", "제작 기록", "나사는 부품의 일부입니다."),
+            ("부품", "조립 기록", "부품은 장치의 일부입니다."),
+            ("대상 하나", "분류 기록", "대상 하나는 대상 둘의 한 종류입니다."),
+            ("대상 둘", "분류 기록", "대상 둘은 대상 하나의 한 종류입니다."),
+        )
+        direct = self.run_cli("관계", "나사", "부분", "부품").stdout
+        self.assertIn("직접 근거 — 나사 → 부품", direct)
+        for relation in (("나사", "부분", "장치"), ("대상 하나", "종류", "대상 하나")):
+            with self.subTest(relation=relation):
+                answer = self.run_cli("관계", *relation).stdout
+                self.assertIn("관계 근거가 부족합니다", answer)
+
+    def test_concept_latest_evidence_is_scoped_to_source_and_relation(self):
+        self.learn_text_observations(
+            ("참새", "분류 기록", "참새는 새의 한 종류입니다."),
+            ("참새", "분류 기록", "참새는 동물의 한 종류입니다."),
+        )
+        self.learn_text_observations(("참새", "분류 기록", "참새는 작은 새입니다."))
+        direct = self.run_cli("개념", "참새").stdout
+        for target in ("새", "동물"):
+            self.assertIn(f"- 종류 → {target} (지지 1건 · 명시적 반박 0건)", direct)
+
+        self.learn_text_observations(("참새", "분류 기록", "참새는 새의 한 종류가 아닙니다."))
+        corrected = self.run_cli("개념", "참새").stdout
+        self.assertIn("- 종류 → 새 (지지 0건 · 명시적 반박 1건)", corrected)
+        self.assertIn("- 종류 → 동물 (지지 1건 · 명시적 반박 0건)", corrected)
+        history = self.run_cli("기록", "참새").stdout
+        self.assertIn("참새는 새의 한 종류입니다.", history)
+        self.assertIn("참새는 새의 한 종류가 아닙니다.", history)
 
     def test_validation_and_lock(self):
         topic = "관측 결과"

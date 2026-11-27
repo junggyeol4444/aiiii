@@ -27,6 +27,12 @@ def main(*, test_mode):
     verify = commands.add_parser("검증", help="저장된 지지와 명시적 반박을 대조")
     verify.add_argument("주제")
     verify.add_argument("주장")
+    concept = commands.add_parser("개념", help="관측에서 형성된 개념의 직접 관계 조회")
+    concept.add_argument("개념")
+    relation = commands.add_parser("관계", help="개념 관계의 직접 근거나 추론 경로 조회")
+    relation.add_argument("개념")
+    relation.add_argument("종류", choices=("종류", "부분"))
+    relation.add_argument("대상")
     for name, description in (
         ("판단", "현재 잠정 판단 조회"),
         ("기록", "저장된 증거 전체 조회"),
@@ -111,6 +117,39 @@ def main(*, test_mode):
             support, refutation, other = memory.verify_claim(args.주제, claim)
             print(f"검증 대상 — {claim}")
             print(f"지지 {support}건 · 명시적 반박 {refutation}건 · 다른 주장 {other}건")
+        elif args.command == "개념":
+            name = normalize(args.개념, "개념", 200)
+            edges = memory.concepts().direct_from(name)
+            if not edges:
+                print("등록된 직접 개념 관계가 없습니다.")
+            for edge in edges:
+                print(
+                    f"- {edge.kind} → {edge.target} "
+                    f"(지지 {len(edge.supporting)}건 · 명시적 반박 {len(edge.refuting)}건)"
+                )
+        elif args.command == "관계":
+            subject = normalize(args.개념, "개념", 200)
+            target = normalize(args.대상, "대상", 500)
+            graph = memory.concepts()
+            direct = graph.direct(subject, args.종류, target)
+            if direct and direct.refuting:
+                print("명시적 반박이 있습니다.")
+                for label, entries in (("지지", direct.supporting), ("반박", direct.refuting)):
+                    for source, evidence in entries:
+                        print(f"- {label} · {source} (증거 #{evidence})")
+            else:
+                path = graph.find_path(subject, args.종류, target)
+                if not path:
+                    print("관계 근거가 부족합니다.")
+                else:
+                    route = " → ".join([subject, *(edge.target for edge in path)])
+                    prefix = "직접 근거" if len(path) == 1 else "추론 경로"
+                    print(f"{prefix} — {route}")
+                    for edge in path:
+                        details = ", ".join(
+                            f"{source} (증거 #{evidence})" for source, evidence in edge.supporting
+                        )
+                        print(f"- {edge.subject} → {edge.target} · {details}")
         elif args.command == "탐구":
             candidate = memory.next_exploration()
             if candidate is None:

@@ -13,6 +13,7 @@ RUNTIME_FILES = (
     "run.py",
     "selflearningai/__init__.py",
     "selflearningai/cli.py",
+    "selflearningai/concepts.py",
     "selflearningai/memory.py",
     "selflearningai/observations.py",
     "selflearningai/research.py",
