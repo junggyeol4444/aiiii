@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOPIC = "가상 관측소의 야간 운영"
 
 
-def evaluate(directory, *, program=ROOT / "selflearningai_test.py"):
+def evaluate(directory, *, program=ROOT / "TEST" / "run.py"):
     directory.mkdir()
     evaluation = directory / "evaluation"
     evaluation.mkdir()
@@ -47,7 +47,10 @@ def evaluate(directory, *, program=ROOT / "selflearningai_test.py"):
     results = []
     for arguments, expected in steps:
         result = subprocess.run(
-            [sys.executable, "-I", "-X", "utf8", str(program), *arguments],
+            [
+                sys.executable, "-E", "-s", "-S", "-B", "-X", "utf8", str(program),
+                "--기억파일", str(database), *arguments,
+            ],
             cwd=directory,
             capture_output=True,
             encoding="utf-8",

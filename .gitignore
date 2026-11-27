@@ -5,3 +5,4 @@ __pycache__/
 *.sqlite3-wal
 /evaluation-run/
 /dist/
+/TEST/evaluation-run/
