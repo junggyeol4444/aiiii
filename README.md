@@ -10,18 +10,20 @@ SelfLearningAI의 개발 목표는 스스로 학습하고 이해하며 판단을
 
 | 구분 | TEST | CLEAN |
 | --- | --- | --- |
-| 프로그램 코드와 학습 명령 | 동일 | 동일 |
+| 실행 파일 | `selflearningai_test.py` | `selflearningai_clean.py` |
+| 학습·판단 엔진 | 동일한 개발 코드 | 동일한 개발 코드 |
 | 배포 시 기억 | 개발 중 얻은 지식·기억·경험 포함 | 빈 상태에서 시작 |
 | 평가 자료와 결과 | 포함 | 제외 |
 | 제공 후 학습 | 가능 | 가능 |
 
-압축을 푼 디렉터리 또는 저장소 루트에서 실행합니다. 기본 CLEAN 모드는 처음 실행할 때 빈 `clean.sqlite3`를 만들고, 이후 이 파일에 사용자의 학습 결과를 저장합니다. TEST 모드는 `test.sqlite3`를 사용합니다. 이전 버전의 `memory.sqlite3`는 `test.sqlite3`가 없을 때 TEST에서 이어서 사용합니다. `--기억파일 경로`는 별도 TEST 기억 파일을 지정합니다.
+각 ZIP을 별도 디렉터리에 풀고 그 안의 실행 파일을 사용합니다. 엔진 소스는 각 배포본에 자체 사본으로 들어갑니다. CLEAN 실행 파일은 `clean.sqlite3`만 사용하며 처음 실행할 때 빈 기억을 만듭니다. TEST 기억 파일을 `clean.sqlite3`로 복사하거나 이름을 바꿔도 SQLite 내부의 종류 표시를 검사해 열기를 거부합니다.
+
+TEST 실행 파일은 `test.sqlite3`를 사용합니다. `test.sqlite3`가 없으면 이전 버전의 `memory.sqlite3`를 TEST에서 이어서 사용합니다. 별도 TEST 기억 경로가 필요하면 TEST 실행 파일의 `--기억파일 경로`를 사용합니다.
 
 ```bash
-python3 -m selflearningai --help
-python3 -m selflearningai --모드 테스트 기록 "가상 관측소의 야간 운영"
-python3 -m selflearningai 학습 "공원의 야간 개방" "개방" "현장 관찰" "출입문이 열려 있었다."
-python3 -m selflearningai 판단 "공원의 야간 개방"
+python3 selflearningai_test.py 기록 "가상 관측소의 야간 운영"
+python3 selflearningai_clean.py 학습 "공원의 야간 개방" "개방" "현장 관찰" "출입문이 열려 있었다."
+python3 selflearningai_clean.py 판단 "공원의 야간 개방"
 ```
 
 ## 검사와 판단
@@ -33,13 +35,13 @@ python3 -m selflearningai 판단 "공원의 야간 개방"
 ## 다음 탐구 주제 선택
 
 ```bash
-python3 -m selflearningai --모드 테스트 탐구
+python3 selflearningai_test.py 탐구
 ```
 
 기억에 있는 주제를 검토해 가장 많은 지지를 받은 주장이 동률인 주제, 의견이 갈리는 주제, 출처가 한 곳뿐인 주제 순서로 선택합니다. 의견이 갈리는 주제끼리는 상위 두 주장 간 출처 수 차이가 작은 주제를 먼저 확인합니다. 우선순위가 같으면 최근에 증거가 추가된 주제를 먼저 선택합니다. 선택 이유와 확인할 질문을 출력합니다. 탐구 주제는 기억에서 선택합니다. 선택한 주제를 로컬 자료에서 조사하려면 자료 파일을 지정합니다.
 
 ```bash
-python3 -m selflearningai --모드 테스트 탐구 --자료 운영.txt --자료 관측.txt
+python3 selflearningai_test.py 탐구 --자료 운영.txt --자료 관측.txt
 ```
 
 각 UTF-8 파일에서 주제 문구가 나오는 줄을 최대 3개씩 찾습니다. 비교할 때 유니코드와 공백을 정규화합니다. 파일당 최대 1 MiB를 읽으며 후보마다 파일 경로, 줄 번호, 구절, 원본 파일의 SHA-256을 표시합니다. 후보는 판단을 위한 검토 자료이며, 진위나 지지 여부를 자동 판정하거나 기억에 자동 등록하지 않습니다.
@@ -47,7 +49,7 @@ python3 -m selflearningai --모드 테스트 탐구 --자료 운영.txt --자료
 ## 확인한 인용을 기억에 통합
 
 ```bash
-python3 -m selflearningai --모드 테스트 인용학습 "공원의 야간 개방" "폐쇄" "관리소" 운영.txt 2
+python3 selflearningai_test.py 인용학습 "공원의 야간 개방" "폐쇄" "관리소" 운영.txt 2
 ```
 
 프로그램은 지정한 줄에 주제 문구가 있는지 확인합니다. 검사를 통과하면 인용문과 파일 경로, 줄 번호, 현재 파일의 SHA-256을 증거에 함께 저장합니다. 사용자가 주장과 출처를 지정하며 같은 출처의 이름을 일관되게 써야 정정으로 집계됩니다.
@@ -71,4 +73,4 @@ python3 tools/evaluate_learning.py --output-dir evaluation-run
 python3 tools/build_distributions.py --test-db evaluation-run/test.sqlite3 --evaluation-dir evaluation-run/evaluation --output-dir dist
 ```
 
-`dist/SelfLearningAI-TEST.zip`과 `dist/SelfLearningAI-CLEAN.zip`에 동일한 실행 코드가 들어갑니다. TEST에는 `test.sqlite3`와 `evaluation/`이 함께 들어갑니다. CLEAN은 사용자가 펼쳐 실행할 때 빈 기억으로 시작합니다.
+`dist/SelfLearningAI-TEST.zip`과 `dist/SelfLearningAI-CLEAN.zip`에 각자의 실행 파일과 공통 엔진 사본이 들어갑니다. TEST에는 `test.sqlite3`와 `evaluation/`이 함께 들어갑니다. CLEAN은 사용자가 펼쳐 실행할 때 빈 기억으로 시작합니다.
