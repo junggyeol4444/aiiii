@@ -5,6 +5,8 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from .concepts import CLAIM_SUFFIXES, ConceptGraph, parse_relation_claim
+
 
 CLEAN_DATABASE_NAME = "clean.sqlite3"
 CLEAN_APPLICATION_ID = 0x534C4149  # "SLAI"
@@ -203,6 +205,7 @@ class Memory:
             "note": normalize(note, "증거", 4000),
             "negated": negated,
         }
+        record["relation"] = parse_relation_claim(record["value"]) is not None
         with self.connect() as connection, connection:
             cursor = connection.execute(
                 """
@@ -211,7 +214,9 @@ class Memory:
                 WHERE NOT EXISTS (
                     SELECT 1 FROM evidence
                     WHERE id = (
-                        SELECT MAX(id) FROM evidence WHERE topic = :topic AND source = :source
+                        SELECT MAX(id) FROM evidence
+                        WHERE topic = :topic AND source = :source
+                          AND (:relation = 0 OR value = :value)
                     ) AND value = :value AND note = :note AND negated = :negated
                 )
                 """,
@@ -252,8 +257,10 @@ class Memory:
         # 같은 출처의 서로 다른 두 기록에는 어느 쪽이 최신인지 나타나 있지 않다.
         unique = {}
         for record in observations:
-            topic, _, source, _, _ = record
-            key = (topic, source)
+            topic, value, source, _, _ = record
+            # 개념 관계는 각각 수정할 수 있으며 서로를 대체하지 않는다.
+            relation = parse_relation_claim(value)
+            key = (topic, source, relation)
             if key in unique and unique[key] != record:
                 raise ValueError(f"같은 주제와 출처에 서로 다른 관측이 있습니다: {topic} / {source}")
             unique[key] = record
@@ -279,13 +286,36 @@ class Memory:
             if candidate:
                 topic = candidate[0]
             else:
-                topic = min(by_topic, key=lambda name: (-len(by_topic[name]), name))
+                source_counts = {
+                    name: len({record[2] for record in records})
+                    for name, records in by_topic.items()
+                }
+                topic = min(source_counts, key=lambda name: (-source_counts[name], name))
             records = by_topic[topic]
             connection.executemany(
                 "INSERT INTO evidence (topic, value, source, note, negated) VALUES (?, ?, ?, ?, ?)",
                 records,
             )
             return topic, len(records)
+
+    def concepts(self):
+        suffixes = tuple(f"%{suffix}" for suffix in CLAIM_SUFFIXES)
+        matches_relation = " OR ".join("value LIKE ?" for _ in suffixes)
+        with self.connect() as connection:
+            records = connection.execute(
+                f"""
+                SELECT topic, value, source, negated, id
+                FROM evidence
+                WHERE id IN (
+                    SELECT MAX(id) FROM evidence
+                    WHERE {matches_relation}
+                    GROUP BY topic, value, source
+                )
+                ORDER BY id
+                """,
+                suffixes,
+            )
+            return ConceptGraph(records)
 
     def next_exploration(self):
         with self.connect() as connection:

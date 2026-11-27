@@ -51,6 +51,7 @@ class DistributionIntegrationTest(unittest.TestCase):
                 "selflearningai/cli.py",
                 "selflearningai/memory.py",
                 "selflearningai/observations.py",
+                "selflearningai/concepts.py",
                 "selflearningai/research.py",
             }
             test_workspace = workspace / "test-install" / "TEST"
@@ -121,6 +122,22 @@ class DistributionIntegrationTest(unittest.TestCase):
                 clean_workspace / "run.py", "검증", "수조 수위", "낮음", cwd=outside_cwd,
             )
             self.assertIn("지지 3건 · 명시적 반박 1건 · 다른 주장 0건", verification.stdout)
+
+            concepts = workspace / "user-concepts.txt"
+            concepts.write_text(
+                "주제: 연필\n출처: 안내 카드\n관측: 연필은 필기구의 한 종류입니다.\n"
+                "\n주제: 필기구\n출처: 분류 기록\n관측: 필기구는 문구의 한 종류입니다.\n",
+                encoding="utf-8",
+            )
+            self.run_program(
+                clean_workspace / "run.py", "자율학습", "--자료", str(concepts), "--계속",
+                cwd=outside_cwd,
+            )
+            inferred = self.run_program(
+                clean_workspace / "run.py", "관계", "연필", "종류", "문구", cwd=outside_cwd,
+            )
+            self.assertIn("추론 경로 — 연필 → 필기구 → 문구", inferred.stdout)
+            self.assertIn("증거 #", inferred.stdout)
 
             test_bytes = (test_workspace / "test.sqlite3").read_bytes()
             clean_file = clean_workspace / "clean.sqlite3"

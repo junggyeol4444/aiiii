@@ -47,6 +47,14 @@ def evaluate(directory, *, program=ROOT / "TEST" / "run.py"):
         encoding="utf-8",
     )
     text_argument = str(text_observation.relative_to(directory))
+    relations = evaluation / "개념 관측.txt"
+    relations.write_text(
+        "주제: 참새\n출처: 표본 카드\n관측: 참새는 새의 한 종류입니다.\n"
+        "\n주제: 새\n출처: 분류 기록\n관측: 새는 동물의 한 종류입니다.\n"
+        "\n주제: 날개\n출처: 모형 설명\n관측: 날개는 새의 일부입니다.\n",
+        encoding="utf-8",
+    )
+    relation_argument = str(relations.relative_to(directory))
     database = directory / "test.sqlite3"
     steps = [
         (("학습", TOPIC, "운영", "예전 공지", "야간 운영이 예고됐습니다."), "증거 1번"),
@@ -64,6 +72,11 @@ def evaluate(directory, *, program=ROOT / "TEST" / "run.py"):
         (("기록", text_topic), "개방 | 방문자 기록 | 그 주제는 개방입니다."),
         (("검증", text_topic, "개방"), "지지 2건 · 명시적 반박 1건 · 다른 주장 0건"),
         (("기록", text_topic), "개방 아님 | 시설 기록 | 그 주제는 개방이 아닙니다."),
+        (("자율학습", "--자료", relation_argument, "--계속"), "학습할 새 관측이 없습니다."),
+        (("개념", "참새"), "종류 → 새 (지지 1건 · 명시적 반박 0건)"),
+        (("관계", "참새", "종류", "동물"), "추론 경로 — 참새 → 새 → 동물"),
+        (("관계", "날개", "부분", "새"), "직접 근거 — 날개 → 새"),
+        (("관계", "날개", "부분", "동물"), "관계 근거가 부족합니다"),
     ]
     (evaluation / "시나리오.json").write_text(
         json.dumps(
