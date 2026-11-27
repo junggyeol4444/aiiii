@@ -1,13 +1,15 @@
 import argparse
 import sqlite3
+from pathlib import Path
 
-from .memory import Memory, normalize
+from .memory import CLEAN_DATABASE_NAME, Memory, normalize
 from .research import display_text, find_passages, verify_passage
 
 
 def main():
     parser = argparse.ArgumentParser(description="SelfLearningAI 장기 기억과 탐구")
-    parser.add_argument("--기억파일", dest="database", default="memory.sqlite3")
+    parser.add_argument("--모드", dest="mode", choices=("클린", "테스트"), help="기본값은 클린")
+    parser.add_argument("--기억파일", dest="database", help="테스트용 기억 파일 경로")
     commands = parser.add_subparsers(dest="command", required=True)
     learn = commands.add_parser("학습", help="출처와 증거를 기억에 통합")
     for label in ("주제", "주장", "출처", "증거"):
@@ -23,10 +25,22 @@ def main():
     for label in ("주제", "주장", "출처", "파일"):
         cite.add_argument(label)
     cite.add_argument("줄번호", type=int)
-    cite.add_argument("sha256", metavar="SHA-256")
+    cite.add_argument("sha256", metavar="SHA-256", nargs="?")
     args = parser.parse_args()
-    memory = Memory(args.database)
+    if args.mode == "클린" and args.database is not None:
+        parser.error("--기억파일은 테스트 모드에서만 사용할 수 있습니다.")
+    test_mode = args.mode == "테스트" or args.database is not None
+    path = CLEAN_DATABASE_NAME
+    if test_mode:
+        legacy = Path("memory.sqlite3")
+        default = Path("test.sqlite3")
+        path = args.database
+        if path is None:
+            path = legacy if not default.exists() and legacy.is_file() else default
+    memory = Memory(path, read_only=not test_mode)
     try:
+        if args.command in ("학습", "인용학습"):
+            memory.require_learning()
         memory.initialize()
         if args.command == "학습":
             entry = memory.learn(args.주제, args.주장, args.출처, args.증거)
@@ -39,7 +53,8 @@ def main():
                 f"줄 {passage.line_number}, SHA-256 {passage.sha256}]"
             )
             entry = memory.learn(topic, args.주장, args.출처, note)
-            print(f"원본 검사 통과. 증거 {entry}번을 통합하고 잠갔습니다.")
+            check = "원본 검사 통과" if args.sha256 is not None else "현재 파일의 인용 위치 확인"
+            print(f"{check}. 증거 {entry}번을 통합하고 잠갔습니다.")
         elif args.command == "판단":
             results = memory.assess(args.주제)
             if not results:

@@ -18,19 +18,86 @@ class MemoryIntegrationTest(unittest.TestCase):
         self.database = Path(directory.name) / "memory.sqlite3"
 
     def run_cli(self, *arguments, expected_status=0):
+        return self.run_memory_cli(
+            "--기억파일", os.fspath(self.database), *arguments, expected_status=expected_status,
+        )
+
+    def run_memory_cli(self, *arguments, expected_status=0):
         result = subprocess.run(
-            [
-                sys.executable, "-m", "selflearningai",
-                "--기억파일", os.fspath(self.database), *arguments,
-            ],
-            cwd=ROOT,
+            [sys.executable, "-m", "selflearningai", *arguments],
+            cwd=self.database.parent,
+            env={**os.environ, "PYTHONPATH": os.fspath(ROOT)},
             capture_output=True,
             text=True,
             encoding="utf-8",
             timeout=10,
         )
-        self.assertEqual(result.returncode, expected_status, result.stderr)
+        if expected_status is None:
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+        else:
+            self.assertEqual(result.returncode, expected_status, result.stderr)
         return result
+
+    def test_clean_and_test_memory_are_isolated(self):
+        topic = "공원 운영"
+        clean_path = self.database.with_name("clean.sqlite3")
+        test_path = self.database.with_name("test.sqlite3")
+        learning = ("학습", topic, "개방", "관리소", "운영 공지")
+
+        rejected = self.run_memory_cli(*learning, expected_status=None)
+        self.assertIn("클린", rejected.stderr)
+        self.assertFalse(clean_path.exists())
+        self.assertFalse(test_path.exists())
+
+        self.assertIn("저장된 증거가 없습니다", self.run_memory_cli("기록", topic).stdout)
+        baseline = clean_path.read_bytes()
+        self.run_memory_cli("--모드", "테스트", *learning)
+        self.assertTrue(test_path.is_file())
+
+        test_history = self.run_memory_cli("--모드", "테스트", "기록", topic).stdout
+        self.assertIn("개방 | 관리소 | 운영 공지", test_history)
+        clean_history = self.run_memory_cli("--모드", "클린", "기록", topic).stdout
+        self.assertIn("저장된 증거가 없습니다", clean_history)
+
+        document = self.database.with_name("공지.txt")
+        document.write_text("공원 운영은 야간에 중단된다.", encoding="utf-8")
+        rejected = self.run_memory_cli(
+            "--모드", "클린", "인용학습", topic, "폐쇄", "관리소", str(document), "1",
+            expected_status=None,
+        )
+        self.assertIn("클린", rejected.stderr)
+        self.assertEqual(clean_path.read_bytes(), baseline)
+
+    def test_test_mode_cannot_write_to_clean_memory_via_path_override(self):
+        topic = "공원 운영"
+        clean_path = self.database.with_name("clean.sqlite3")
+        self.run_memory_cli("기록", topic)
+        baseline = clean_path.read_bytes()
+        alias = self.database.with_name("별칭.sqlite3")
+        os.link(clean_path, alias)
+
+        for path in (clean_path, alias):
+            with self.subTest(path=path):
+                rejected = self.run_memory_cli(
+                    "--모드", "테스트", "--기억파일", str(path),
+                    "학습", topic, "개방", "관리소", "운영 공지",
+                    expected_status=None,
+                )
+                self.assertIn("클린", rejected.stderr)
+        self.assertEqual(clean_path.read_bytes(), baseline)
+
+    def test_legacy_memory_is_only_visible_in_test_mode(self):
+        topic = "공원 운영"
+        self.run_cli("학습", topic, "개방", "관리소", "기존 공지")
+        self.assertIn("저장된 증거가 없습니다", self.run_memory_cli("기록", topic).stdout)
+        test_history = self.run_memory_cli("--모드", "테스트", "기록", topic).stdout
+        self.assertIn("개방 | 관리소 | 기존 공지", test_history)
+
+        rejected = self.run_memory_cli(
+            "--모드", "클린", "--기억파일", str(self.database), "기록", topic,
+            expected_status=None,
+        )
+        self.assertIn("기억파일", rejected.stderr)
 
     def test_evidence_changes_judgment_and_preserves_history(self):
         topic = "공원의 야간 개방"
@@ -208,6 +275,22 @@ class MemoryIntegrationTest(unittest.TestCase):
         self.assertIn("공원 운영은 야간에 중단된다.", history)
         self.assertIn(f"줄 2, SHA-256 {digest}", history)
         self.assertIn("개방 | 현장 관찰", history)
+
+    def test_citation_without_expected_hash_checks_current_document(self):
+        topic = "공원 운영"
+        document = self.database.with_name("공지.txt")
+        data = "제목\n공원 운영은 야간에 중단된다.\n".encode("utf-8")
+        document.write_bytes(data)
+        citation = ("인용학습", topic, "폐쇄", "관리소", str(document))
+
+        wrong_line = self.run_cli(*citation, "1", expected_status=1)
+        self.assertIn("주제 문구를 찾지 못했습니다", wrong_line.stderr)
+        self.assertIn("저장된 증거가 없습니다", self.run_cli("기록", topic).stdout)
+
+        self.run_cli(*citation, "2")
+        history = self.run_cli("기록", topic).stdout
+        self.assertIn("공원 운영은 야간에 중단된다.", history)
+        self.assertIn(f"줄 2, SHA-256 {hashlib.sha256(data).hexdigest()}", history)
 
 
 if __name__ == "__main__":

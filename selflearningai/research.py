@@ -50,14 +50,15 @@ def matching_excerpt(topic, line):
     return display_text(excerpt)
 
 
-def verify_passage(topic, document, line_number, expected_digest):
-    if len(expected_digest) != 64 or any(
-        character not in "0123456789abcdefABCDEF" for character in expected_digest
+def verify_passage(topic, document, line_number, expected_digest=None):
+    if expected_digest is not None and (
+        len(expected_digest) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in expected_digest)
     ):
         raise ValueError("검색 결과에 표시된 64자리 SHA-256을 입력해야 합니다.")
     path = Path(document).resolve()
     content, digest = read_document(path)
-    if digest != expected_digest.lower():
+    if expected_digest is not None and digest != expected_digest.lower():
         raise ValueError("파일 SHA-256이 검색 결과와 다릅니다. 다시 탐구하세요.")
     lines = content.splitlines()
     if not 1 <= line_number <= len(lines):
