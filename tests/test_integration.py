@@ -11,7 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class MemoryIntegrationTest(unittest.TestCase):
+class ProgramIntegrationCase(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -43,6 +43,8 @@ class MemoryIntegrationTest(unittest.TestCase):
             self.assertEqual(result.returncode, expected_status, result.stderr)
         return result
 
+
+class CleanProgramIntegrationTest(ProgramIntegrationCase):
     def test_clean_and_test_memory_are_isolated(self):
         topic = "공원 운영"
         clean_path = self.database.with_name("clean.sqlite3")
@@ -137,6 +139,8 @@ class MemoryIntegrationTest(unittest.TestCase):
 
         self.run_clean_cli("--기억파일", str(self.database), "기록", topic, expected_status=2)
 
+
+class TestProgramIntegrationTest(ProgramIntegrationCase):
     def test_evidence_changes_judgment_and_preserves_history(self):
         topic = "공원의 야간 개방"
         self.assertIn("저장된 증거가 없습니다", self.run_cli("판단", topic).stdout)

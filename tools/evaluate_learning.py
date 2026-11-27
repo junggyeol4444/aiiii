@@ -3,7 +3,6 @@
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -15,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOPIC = "가상 관측소의 야간 운영"
 
 
-def evaluate(directory):
+def evaluate(directory, *, program=ROOT / "selflearningai_test.py"):
     directory.mkdir()
     evaluation = directory / "evaluation"
     evaluation.mkdir()
@@ -24,7 +23,6 @@ def evaluate(directory):
     digest = hashlib.sha256(document.read_bytes()).hexdigest()
     document_argument = str(document.relative_to(directory))
     database = directory / "test.sqlite3"
-    environment = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     steps = [
         (("학습", TOPIC, "운영", "예전 공지", "야간 운영이 예고됐습니다."), "증거 1번"),
         (("판단", TOPIC), "잠정 판단 — 운영"),
@@ -49,9 +47,8 @@ def evaluate(directory):
     results = []
     for arguments, expected in steps:
         result = subprocess.run(
-            [sys.executable, str(ROOT / "selflearningai_test.py"), *arguments],
+            [sys.executable, "-I", "-X", "utf8", str(program), *arguments],
             cwd=directory,
-            env=environment,
             capture_output=True,
             encoding="utf-8",
             timeout=15,

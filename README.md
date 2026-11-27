@@ -11,12 +11,12 @@ SelfLearningAI의 개발 목표는 스스로 학습하고 이해하며 판단을
 | 구분 | TEST | CLEAN |
 | --- | --- | --- |
 | 실행 파일 | `selflearningai_test.py` | `selflearningai_clean.py` |
-| 학습·판단 엔진 | 동일한 개발 코드 | 동일한 개발 코드 |
+| 코드 | 이 파일에서 개발 | 통과한 TEST 코드를 이 파일에 반영 |
 | 배포 시 기억 | 개발 중 얻은 지식·기억·경험 포함 | 빈 상태에서 시작 |
 | 평가 자료와 결과 | 포함 | 제외 |
 | 제공 후 학습 | 가능 | 가능 |
 
-각 ZIP을 별도 디렉터리에 풀고 그 안의 실행 파일을 사용합니다. 엔진 소스는 각 배포본에 자체 사본으로 들어갑니다. CLEAN 실행 파일은 `clean.sqlite3`만 사용하며 처음 실행할 때 빈 기억을 만듭니다. TEST 기억 파일을 `clean.sqlite3`로 복사하거나 이름을 바꿔도 SQLite 내부의 종류 표시를 검사해 열기를 거부합니다.
+각 Python 파일은 장기 기억, 판단, 탐구, 학습 코드를 모두 포함합니다. 사용할 파일 하나만 별도 디렉터리에 두고 Python으로 실행할 수 있습니다. CLEAN 실행 파일은 `clean.sqlite3`만 사용하며 처음 실행할 때 빈 기억을 만듭니다. TEST 기억 파일을 `clean.sqlite3`로 복사하거나 이름을 바꿔도 SQLite 내부의 종류 표시를 검사해 열기를 거부합니다.
 
 TEST 실행 파일은 `test.sqlite3`를 사용합니다. `test.sqlite3`가 없으면 이전 버전의 `memory.sqlite3`를 TEST에서 이어서 사용합니다. 별도 TEST 기억 경로가 필요하면 TEST 실행 파일의 `--기억파일 경로`를 사용합니다.
 
@@ -64,13 +64,18 @@ python3 -m unittest discover -s tests -v
 
 실제 CLI를 여러 프로세스에서 실행해 기억 유지, 판단 보류와 변경, 기존 증거 보존, 입력 검사, 출처 정정, 이전 형식 기억 파일의 자동 변환, 클린과 테스트의 격리, 선택적 인용 해시 확인, 데이터베이스 잠금을 확인합니다.
 
-## 저장소에서 TEST와 CLEAN 배포본 만들기
+## TEST에서 개발하고 CLEAN에 반영
 
-개발 중 학습·평가는 TEST 스냅샷에서 진행합니다. 아래 예는 새 디렉터리에서 가상 사례로 실제 학습과 평가를 실행한 뒤 두 배포본을 만듭니다. 개발 중 누적한 별도 TEST 기억을 배포할 때는 해당 TEST 데이터베이스와 그 평가 디렉터리를 지정합니다.
+1. 개발 코드는 `selflearningai_test.py`에서 수정합니다. 개발 중 학습은 이 파일로 실행하고 TEST의 기억과 평가 자료를 보존합니다.
+2. TEST 전용 통합 테스트를 먼저 실행합니다.
+3. `promote_test_code.py`는 TEST 코드 스냅샷으로 별도의 학습·평가를 실행합니다. 통과하면 같은 스냅샷의 코드만 `selflearningai_clean.py`에 반영합니다. 실패하면 기존 CLEAN 코드가 유지됩니다. 평가 디렉터리는 새 경로를 지정합니다.
+4. 두 프로그램이 각각 실행되는지 통합 테스트로 확인하고 두 배포본을 만듭니다.
 
 ```bash
-python3 tools/evaluate_learning.py --output-dir evaluation-run
+python3 -m unittest discover -s tests -p test_integration.py -k TestProgramIntegrationTest
+python3 tools/promote_test_code.py --output-dir evaluation-run
+python3 -m unittest discover -s tests -v
 python3 tools/build_distributions.py --test-db evaluation-run/test.sqlite3 --evaluation-dir evaluation-run/evaluation --output-dir dist
 ```
 
-`dist/SelfLearningAI-TEST.zip`과 `dist/SelfLearningAI-CLEAN.zip`에 각자의 실행 파일과 공통 엔진 사본이 들어갑니다. TEST에는 `test.sqlite3`와 `evaluation/`이 함께 들어갑니다. CLEAN은 사용자가 펼쳐 실행할 때 빈 기억으로 시작합니다.
+배포 도구는 각 ZIP에 해당 소스 파일을 그대로 넣습니다. TEST ZIP에는 그 버전의 TEST 기억과 평가 자료도 포함합니다. CLEAN ZIP에는 프로그램 파일과 README가 들어갑니다. 개발 중 축적한 별도의 TEST 기억을 제공하려면 배포 도구에 해당 기억 파일과 평가 디렉터리를 지정합니다.
