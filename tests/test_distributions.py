@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -49,6 +50,7 @@ class DistributionIntegrationTest(unittest.TestCase):
                 "selflearningai/__init__.py",
                 "selflearningai/cli.py",
                 "selflearningai/memory.py",
+                "selflearningai/observations.py",
                 "selflearningai/research.py",
             }
             test_workspace = workspace / "test-install" / "TEST"
@@ -83,14 +85,29 @@ class DistributionIntegrationTest(unittest.TestCase):
                 clean_workspace / "run.py", "판단", topic, cwd=outside_cwd,
             )
             self.assertIn("저장된 증거가 없습니다", clean_result.stdout)
-            self.run_program(
-                clean_workspace / "run.py", "학습", topic, "폐쇄", "사용자 관측", "정문 확인",
+
+            observations = workspace / "user-observations.json"
+            observations.write_text(
+                json.dumps(
+                    [
+                        {"주제": "수조 수위", "주장": "낮음", "출처": "직접 관찰", "증거": "눈금 2"},
+                        {"주제": "정원 토양", "주장": "건조", "출처": "직접 관찰", "증거": "표면 확인"},
+                        {"주제": "수조 수위", "주장": "낮음", "출처": "측정기", "증거": "경보 기록"},
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            learned = self.run_program(
+                clean_workspace / "run.py", "자율학습", "--자료", str(observations),
                 cwd=outside_cwd,
             )
+            self.assertIn("선택한 학습 주제 — 수조 수위", learned.stdout)
+            self.assertIn("관측 2건을 통합", learned.stdout)
             clean_result = self.run_program(
-                clean_workspace / "run.py", "판단", topic, cwd=outside_cwd,
+                clean_workspace / "run.py", "판단", "수조 수위", cwd=outside_cwd,
             )
-            self.assertIn("잠정 판단 — 폐쇄", clean_result.stdout)
+            self.assertIn("잠정 판단 — 낮음", clean_result.stdout)
 
             test_bytes = (test_workspace / "test.sqlite3").read_bytes()
             clean_file = clean_workspace / "clean.sqlite3"
