@@ -1,3 +1,4 @@
+import hashlib
 import os
 from pathlib import Path
 import sqlite3
@@ -148,6 +149,36 @@ class MemoryIntegrationTest(unittest.TestCase):
         self.assertIn("다음 탐구 주제 — 동률", self.run_cli("탐구").stdout)
         self.run_cli("학습", "동률", "찬성", "반대 출처 0", "정정")
         self.assertIn("다음 탐구 주제 — 근소한 차이", self.run_cli("탐구").stdout)
+
+    def test_exploration_searches_local_documents_and_keeps_memory_unchanged(self):
+        self.run_cli("학습", "공원 운영", "개방", "현장 관찰", "첫 방문")
+        document = self.database.with_name("운영.txt")
+        data = "제목\n공원   운영 기준은 매월 개정된다.\n".encode("utf-8")
+        document.write_bytes(data)
+        unrelated = self.database.with_name("기타.txt")
+        unrelated.write_text("도서관 운영 안내", encoding="utf-8")
+
+        result = self.run_cli(
+            "탐구", "--자료", str(document), "--자료", str(document), "--자료", str(unrelated)
+        ).stdout
+        self.assertEqual(result.count("증거 후보 —"), 1)
+        self.assertIn(f"{document.resolve()}:2", result)
+        self.assertIn("공원 운영 기준은 매월 개정된다.", result)
+        self.assertIn(hashlib.sha256(data).hexdigest(), result)
+        self.assertIn("주제와 일치하는 구절을 찾지 못했습니다", self.run_cli(
+            "탐구", "--자료", str(unrelated)
+        ).stdout)
+        history = self.run_cli("기록", "공원 운영").stdout
+        self.assertEqual(len(history.splitlines()), 1)
+        self.assertIn("개방 | 현장 관찰 | 첫 방문", history)
+
+    def test_exploration_reports_unsupported_document(self):
+        self.run_cli("학습", "공원 운영", "개방", "현장 관찰", "첫 방문")
+        document = self.database.with_name("손상.txt")
+        document.write_bytes(bytes([255]))
+        result = self.run_cli("탐구", "--자료", str(document), expected_status=1)
+        self.assertIn("UTF-8 문서를 지정해야 합니다", result.stderr)
+        self.assertEqual(result.stdout, "")
 
 
 if __name__ == "__main__":
