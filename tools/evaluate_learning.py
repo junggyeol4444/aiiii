@@ -42,7 +42,8 @@ def evaluate(directory, *, program=ROOT / "TEST" / "run.py"):
     text_observation = evaluation / "도서실 관측.txt"
     text_observation.write_text(
         f"주제: {text_topic}\n출처: 안내문\n관측: {text_topic}은 개방입니다.\n"
-        "\n출처: 방문자 기록\n관측: 그 주제는 개방입니다.\n",
+        "\n출처: 방문자 기록\n관측: 그 주제는 개방입니다.\n"
+        "\n출처: 시설 기록\n관측: 그 주제는 개방이 아닙니다.\n",
         encoding="utf-8",
     )
     text_argument = str(text_observation.relative_to(directory))
@@ -61,6 +62,8 @@ def evaluate(directory, *, program=ROOT / "TEST" / "run.py"):
         (("판단", next_topic), "운영 (출처 2개)"),
         (automatic, "학습할 새 관측이 없습니다."),
         (("기록", text_topic), "개방 | 방문자 기록 | 그 주제는 개방입니다."),
+        (("검증", text_topic, "개방"), "지지 2건 · 명시적 반박 1건 · 다른 주장 0건"),
+        (("기록", text_topic), "개방 아님 | 시설 기록 | 그 주제는 개방이 아닙니다."),
     ]
     (evaluation / "시나리오.json").write_text(
         json.dumps(

@@ -433,6 +433,78 @@ class TestProgramIntegrationTest(ProgramIntegrationCase):
         self.assertEqual(len(history.splitlines()), 3)
         self.assertIn("개방 | 현장 관찰 | 출입문이 열려 있었다.", history)
 
+    def test_verification_distinguishes_text_negation_and_alternative_claims(self):
+        topic = "공원"
+        self.run_cli("학습", topic, "개방", "안내판", "개방을 안내했다.")
+        self.run_cli("학습", topic, "보수 중", "정비 기록", "보수 일정을 기록했다.")
+        document = self.workspace / "부정.txt"
+        document.write_text(
+            "주제: 공원\n출처: 관리소\n관측: 공원은 개방이 아닙니다.\n",
+            encoding="utf-8",
+        )
+
+        self.run_cli("자율학습", "--자료", str(document))
+        self.assertIn("판단 보류", self.run_cli("판단", topic).stdout)
+        verification = self.run_cli("검증", topic, "개방").stdout
+        for count in ("지지 1건", "명시적 반박 1건", "다른 주장 1건"):
+            self.assertIn(count, verification)
+
+        document.write_text(
+            "주제: 공원\n출처: 현장\n관측: 공원은 개방이 아니다.\n",
+            encoding="utf-8",
+        )
+        self.run_cli("자율학습", "--자료", str(document))
+        self.assertIn("잠정 판단 — 개방 아님", self.run_cli("판단", topic).stdout)
+        alternative = self.run_cli("검증", topic, "보수 중").stdout
+        for count in ("지지 1건", "명시적 반박 0건", "다른 주장 3건"):
+            self.assertIn(count, alternative)
+        history = self.run_cli("기록", topic).stdout
+        self.assertIn("공원은 개방이 아닙니다.", history)
+        self.assertIn("공원은 개방이 아니다.", history)
+
+    def test_verification_counts_latest_json_polarity_per_source(self):
+        topic = "공원 운영"
+        document = self.workspace / "공지.json"
+        record = {
+            "주제": topic, "주장": "개방", "출처": "관리소", "증거": "공식 운영 안내", "부정": True,
+        }
+        document.write_text(json.dumps([record], ensure_ascii=False), encoding="utf-8")
+        self.run_cli("자율학습", "--자료", str(document))
+        verification = self.run_cli("검증", topic, "개방").stdout
+        self.assertIn("지지 0건", verification)
+        self.assertIn("명시적 반박 1건", verification)
+
+        record["부정"] = False
+        document.write_text(json.dumps([record], ensure_ascii=False), encoding="utf-8")
+        self.run_cli("자율학습", "--자료", str(document))
+        baseline = self.database.read_bytes()
+        record["부정"] = True
+        document.write_text(json.dumps([record], ensure_ascii=False), encoding="utf-8")
+        self.run_cli("자율학습", "--자료", str(document))
+        self.assertEqual(self.database.read_bytes(), baseline)
+        verification = self.run_cli("검증", topic, "개방").stdout
+        for count in ("지지 1건", "명시적 반박 0건", "다른 주장 0건"):
+            self.assertIn(count, verification)
+        history = self.run_cli("기록", topic).stdout
+        self.assertEqual(len(history.splitlines()), 2)
+        self.assertIn("개방 아님 | 관리소 | 공식 운영 안내", history)
+        self.assertIn("개방 | 관리소 | 공식 운영 안내", history)
+
+        record["부정"] = 0
+        document.write_text(json.dumps([record], ensure_ascii=False), encoding="utf-8")
+        self.run_cli("자율학습", "--자료", str(document), expected_status=1)
+        self.assertEqual(self.database.read_bytes(), baseline)
+
+    def test_manual_and_cited_learning_preserve_explicit_negation(self):
+        topic = "공원 운영"
+        document = self.workspace / "공지.txt"
+        document.write_text("공원 운영은 중단됩니다.\n", encoding="utf-8")
+        self.run_cli("학습", topic, "개방", "현장", "정문이 닫혀 있었다.", "--부정")
+        self.run_cli("인용학습", topic, "개방", "관리소", str(document), "1", "--부정")
+        verification = self.run_cli("검증", topic, "개방").stdout
+        self.assertIn("지지 0건", verification)
+        self.assertIn("명시적 반박 2건", verification)
+
     def test_validation_and_lock(self):
         topic = "관측 결과"
         self.run_cli("학습", topic, "맑음", "관측소", "구름이 없었다.")
@@ -499,6 +571,48 @@ class TestProgramIntegrationTest(ProgramIntegrationCase):
         with sqlite3.connect(self.database) as connection:
             with self.assertRaisesRegex(sqlite3.IntegrityError, "잠긴 증거"):
                 connection.execute("DELETE FROM evidence")
+
+    def test_v1_memory_migrates_existing_evidence_as_positive_and_keeps_lock(self):
+        for application_id in (0, 0x534C4154):
+            with self.subTest(application_id=application_id):
+                database = self.workspace / f"v1-{application_id}.sqlite3"
+                with sqlite3.connect(database) as connection:
+                    connection.executescript(f"""
+                        PRAGMA user_version = 1;
+                        PRAGMA application_id = {application_id};
+                        CREATE TABLE evidence (
+                            id INTEGER PRIMARY KEY,
+                            topic TEXT NOT NULL,
+                            value TEXT NOT NULL,
+                            source TEXT NOT NULL,
+                            note TEXT NOT NULL,
+                            recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        );
+                        CREATE INDEX evidence_topic_source ON evidence (topic, source, id);
+                        CREATE TRIGGER lock_evidence_update BEFORE UPDATE ON evidence
+                        BEGIN
+                            SELECT RAISE(ABORT, '잠긴 증거');
+                        END;
+                        CREATE TRIGGER lock_evidence_delete BEFORE DELETE ON evidence
+                        BEGIN
+                            SELECT RAISE(ABORT, '잠긴 증거');
+                        END;
+                        INSERT INTO evidence VALUES
+                            (7, '공원 운영', '개방', '관리소', '기존 공지', '2026-11-27 00:00:00');
+                    """)
+                options = ("--기억파일", str(database))
+                verification = self.run_test_cli(*options, "검증", "공원 운영", "개방").stdout
+                self.assertIn("지지 1건", verification)
+                self.assertIn("명시적 반박 0건", verification)
+                history = self.run_test_cli(*options, "기록", "공원 운영").stdout
+                self.assertIn("7. 개방 | 관리소 | 기존 공지 | 2026-11-27 00:00:00 UTC", history)
+
+                with sqlite3.connect(database) as connection:
+                    self.assertEqual(connection.execute("PRAGMA user_version").fetchone(), (2,))
+                    self.assertEqual(connection.execute("SELECT id, negated FROM evidence").fetchall(), [(7, 0)])
+                    for query in ("UPDATE evidence SET negated = 1", "DELETE FROM evidence"):
+                        with self.assertRaisesRegex(sqlite3.IntegrityError, "잠긴 증거"):
+                            connection.execute(query)
 
     def test_exploration_reprioritizes_after_source_correction(self):
         def explore():

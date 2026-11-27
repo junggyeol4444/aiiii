@@ -10,6 +10,10 @@ from .research import display_text, find_passages, verify_passage
 MAX_OBSERVATION_FILES = 8
 
 
+def describe_claim(value, negated):
+    return f"{value} 아님" if negated else value
+
+
 def main(*, test_mode):
     edition = "TEST" if test_mode else "CLEAN"
     parser = argparse.ArgumentParser(description=f"SelfLearningAI {edition} 장기 기억과 탐구")
@@ -19,6 +23,10 @@ def main(*, test_mode):
     learn = commands.add_parser("학습", help="출처와 증거를 기억에 통합")
     for label in ("주제", "주장", "출처", "증거"):
         learn.add_argument(label)
+    learn.add_argument("--부정", action="store_true", help="입력한 주장을 명시적으로 부정")
+    verify = commands.add_parser("검증", help="저장된 지지와 명시적 반박을 대조")
+    verify.add_argument("주제")
+    verify.add_argument("주장")
     for name, description in (
         ("판단", "현재 잠정 판단 조회"),
         ("기록", "저장된 증거 전체 조회"),
@@ -31,6 +39,7 @@ def main(*, test_mode):
         cite.add_argument(label)
     cite.add_argument("줄번호", type=int)
     cite.add_argument("sha256", metavar="SHA-256", nargs="?")
+    cite.add_argument("--부정", action="store_true", help="입력한 주장을 명시적으로 부정")
     automatic = commands.add_parser("자율학습", help="관측 자료에서 주제를 선택해 학습")
     automatic.add_argument(
         "--자료", dest="documents", action="append", required=True, metavar="파일",
@@ -73,7 +82,7 @@ def main(*, test_mode):
 
         memory.initialize()
         if args.command == "학습":
-            entry = memory.learn(args.주제, args.주장, args.출처, args.증거)
+            entry = memory.learn(args.주제, args.주장, args.출처, args.증거, negated=args.부정)
             print(f"검사 통과. 증거 {entry}번을 통합하고 잠갔습니다.")
         elif args.command == "인용학습":
             topic = normalize(args.주제, "주제", 200)
@@ -82,7 +91,7 @@ def main(*, test_mode):
                 f"{passage.text} [파일 {str(passage.path)!r}, "
                 f"줄 {passage.line_number}, SHA-256 {passage.sha256}]"
             )
-            entry = memory.learn(topic, args.주장, args.출처, note)
+            entry = memory.learn(topic, args.주장, args.출처, note, negated=args.부정)
             check = "원본 검사 통과" if args.sha256 is not None else "현재 파일의 인용 위치 확인"
             print(f"{check}. 증거 {entry}번을 통합하고 잠갔습니다.")
         elif args.command == "판단":
@@ -90,23 +99,33 @@ def main(*, test_mode):
             if not results:
                 print("저장된 증거가 없습니다.")
             else:
-                value, count = results[0]
+                value, count, negated = results[0]
                 if len(results) > 1 and results[1][1] == count:
                     print("판단 보류. 가장 많은 지지를 얻은 주장이 동률입니다.")
                 else:
-                    print(f"잠정 판단 — {value}")
-                for value, count in results:
-                    print(f"- {value} (출처 {count}개)")
+                    print(f"잠정 판단 — {describe_claim(value, negated)}")
+                for value, count, negated in results:
+                    print(f"- {describe_claim(value, negated)} (출처 {count}개)")
+        elif args.command == "검증":
+            claim = normalize(args.주장, "주장", 500)
+            support, refutation, other = memory.verify_claim(args.주제, claim)
+            print(f"검증 대상 — {claim}")
+            print(f"지지 {support}건 · 명시적 반박 {refutation}건 · 다른 주장 {other}건")
         elif args.command == "탐구":
             candidate = memory.next_exploration()
             if candidate is None:
                 print("현재 기억에서 추가 확인이 필요한 주제를 찾지 못했습니다.")
             else:
-                topic, sources, leading, other, leading_votes, other_votes = candidate
+                (
+                    topic, sources, leading, other, leading_votes, other_votes,
+                    leading_negated, other_negated,
+                ) = candidate
+                leading = describe_claim(leading, leading_negated)
                 if other is None:
                     reason = "현재 출처가 1개뿐입니다."
                     question = f"다른 출처에서도 ‘{leading}’ 주장을 뒷받침하나요?"
                 else:
+                    other = describe_claim(other, other_negated)
                     reason = (
                         f"출처 {sources}개 중 ‘{leading}’ {leading_votes}개, "
                         f"‘{other}’ {other_votes}개로 의견이 갈립니다."
@@ -126,7 +145,8 @@ def main(*, test_mode):
             records = memory.history(args.주제)
             if not records:
                 print("저장된 증거가 없습니다.")
-            for entry, value, source, note, timestamp in records:
-                print(f"{entry}. {value} | {source} | {note} | {timestamp} UTC")
+            for entry, value, source, note, timestamp, negated in records:
+                claim = describe_claim(value, negated)
+                print(f"{entry}. {claim} | {source} | {note} | {timestamp} UTC")
     except (ValueError, OSError, sqlite3.Error) as error:
         parser.exit(1, f"오류 — {error}\n")
