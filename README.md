@@ -10,20 +10,23 @@ SelfLearningAI의 개발 목표는 스스로 학습하고 이해하며 판단을
 
 | 구분 | TEST | CLEAN |
 | --- | --- | --- |
-| 실행 파일 | `selflearningai_test.py` | `selflearningai_clean.py` |
+| 프로그램 폴더 | `TEST/` | `CLEAN/` |
+| 실행 파일 | `TEST/run.py` | `CLEAN/run.py` |
 | 코드 | 이 파일에서 개발 | 통과한 TEST 코드를 이 파일에 반영 |
 | 배포 시 기억 | 개발 중 얻은 지식·기억·경험 포함 | 빈 상태에서 시작 |
 | 평가 자료와 결과 | 포함 | 제외 |
 | 제공 후 학습 | 가능 | 가능 |
 
-각 Python 파일은 장기 기억, 판단, 탐구, 학습 코드를 모두 포함합니다. 사용할 파일 하나만 별도 디렉터리에 두고 Python으로 실행할 수 있습니다. CLEAN 실행 파일은 `clean.sqlite3`만 사용하며 처음 실행할 때 빈 기억을 만듭니다. TEST 기억 파일을 `clean.sqlite3`로 복사하거나 이름을 바꿔도 SQLite 내부의 종류 표시를 검사해 열기를 거부합니다.
+각 폴더의 `run.py`는 그 폴더 안의 모듈을 사용합니다. `selflearningai/cli.py`는 명령 실행, `memory.py`는 학습·장기 기억·판단, `research.py`는 탐구와 인용 검사를 담당합니다. 기억 파일의 기본 위치도 각 프로그램 폴더입니다.
 
-TEST 실행 파일은 `test.sqlite3`를 사용합니다. `test.sqlite3`가 없으면 이전 버전의 `memory.sqlite3`를 TEST에서 이어서 사용합니다. 별도 TEST 기억 경로가 필요하면 TEST 실행 파일의 `--기억파일 경로`를 사용합니다.
+TEST는 `TEST/test.sqlite3`에 기억을 저장하며, 이 파일이 없으면 `TEST/memory.sqlite3`를 이어서 사용합니다. TEST의 `--기억파일 경로`로 별도 TEST 기억 파일을 열 수 있습니다. CLEAN은 `CLEAN/clean.sqlite3`로 시작하며, TEST 데이터베이스를 복사하거나 이름을 바꿔도 종류 표시를 검사해 거부합니다. 이전 버전에서 폴더 밖에 만든 기억 파일을 계속 쓰려면 같은 종류의 프로그램 폴더에 두면 됩니다.
+
+저장소 루트에서 실행하는 예입니다. ZIP을 펼친 경우 각 프로그램 폴더 안에서 `python3 run.py`에 명령을 붙입니다.
 
 ```bash
-python3 selflearningai_test.py 기록 "가상 관측소의 야간 운영"
-python3 selflearningai_clean.py 학습 "공원의 야간 개방" "개방" "현장 관찰" "출입문이 열려 있었다."
-python3 selflearningai_clean.py 판단 "공원의 야간 개방"
+python3 TEST/run.py 기록 "가상 관측소의 야간 운영"
+python3 CLEAN/run.py 학습 "공원의 야간 개방" "개방" "현장 관찰" "출입문이 열려 있었다."
+python3 CLEAN/run.py 판단 "공원의 야간 개방"
 ```
 
 ## 검사와 판단
@@ -35,13 +38,13 @@ python3 selflearningai_clean.py 판단 "공원의 야간 개방"
 ## 다음 탐구 주제 선택
 
 ```bash
-python3 selflearningai_test.py 탐구
+python3 TEST/run.py 탐구
 ```
 
 기억에 있는 주제를 검토해 가장 많은 지지를 받은 주장이 동률인 주제, 의견이 갈리는 주제, 출처가 한 곳뿐인 주제 순서로 선택합니다. 의견이 갈리는 주제끼리는 상위 두 주장 간 출처 수 차이가 작은 주제를 먼저 확인합니다. 우선순위가 같으면 최근에 증거가 추가된 주제를 먼저 선택합니다. 선택 이유와 확인할 질문을 출력합니다. 탐구 주제는 기억에서 선택합니다. 선택한 주제를 로컬 자료에서 조사하려면 자료 파일을 지정합니다.
 
 ```bash
-python3 selflearningai_test.py 탐구 --자료 운영.txt --자료 관측.txt
+python3 TEST/run.py 탐구 --자료 운영.txt --자료 관측.txt
 ```
 
 각 UTF-8 파일에서 주제 문구가 나오는 줄을 최대 3개씩 찾습니다. 비교할 때 유니코드와 공백을 정규화합니다. 파일당 최대 1 MiB를 읽으며 후보마다 파일 경로, 줄 번호, 구절, 원본 파일의 SHA-256을 표시합니다. 후보는 판단을 위한 검토 자료이며, 진위나 지지 여부를 자동 판정하거나 기억에 자동 등록하지 않습니다.
@@ -49,7 +52,7 @@ python3 selflearningai_test.py 탐구 --자료 운영.txt --자료 관측.txt
 ## 확인한 인용을 기억에 통합
 
 ```bash
-python3 selflearningai_test.py 인용학습 "공원의 야간 개방" "폐쇄" "관리소" 운영.txt 2
+python3 TEST/run.py 인용학습 "공원의 야간 개방" "폐쇄" "관리소" 운영.txt 2
 ```
 
 프로그램은 지정한 줄에 주제 문구가 있는지 확인합니다. 검사를 통과하면 인용문과 파일 경로, 줄 번호, 현재 파일의 SHA-256을 증거에 함께 저장합니다. 사용자가 주장과 출처를 지정하며 같은 출처의 이름을 일관되게 써야 정정으로 집계됩니다.
@@ -66,16 +69,16 @@ python3 -m unittest discover -s tests -v
 
 ## TEST에서 개발하고 CLEAN에 반영
 
-1. 개발 코드는 `selflearningai_test.py`에서 수정합니다. 개발 중 학습은 이 파일로 실행하고 TEST의 기억과 평가 자료를 보존합니다.
+1. 개발 코드는 `TEST/selflearningai/`에서 수정합니다. 개발 중 학습에는 TEST 프로그램을 사용합니다.
 2. TEST 전용 통합 테스트를 먼저 실행합니다.
-3. `promote_test_code.py`는 TEST 코드 스냅샷으로 별도의 학습·평가를 실행합니다. 통과하면 같은 스냅샷의 코드만 `selflearningai_clean.py`에 반영합니다. 실패하면 기존 CLEAN 코드가 유지됩니다. 평가 디렉터리는 새 경로를 지정합니다.
-4. 두 프로그램이 각각 실행되는지 통합 테스트로 확인하고 두 배포본을 만듭니다.
+3. `promote_test_code.py`가 TEST 코드 스냅샷으로 학습·평가를 실행합니다. 통과하면 평가한 Python 모듈을 `CLEAN/selflearningai/`에 반영합니다. 평가가 실패하면 CLEAN은 기존 모듈로 유지됩니다. 평가 디렉터리는 새 경로를 지정합니다.
+4. 두 프로그램의 통합 테스트를 실행하고 각 폴더에서 배포본을 만듭니다.
 
 ```bash
 python3 -m unittest discover -s tests -p test_integration.py -k TestProgramIntegrationTest
-python3 tools/promote_test_code.py --output-dir evaluation-run
+python3 tools/promote_test_code.py --output-dir TEST/evaluation-run
 python3 -m unittest discover -s tests -v
-python3 tools/build_distributions.py --test-db evaluation-run/test.sqlite3 --evaluation-dir evaluation-run/evaluation --output-dir dist
+python3 tools/build_distributions.py --test-db TEST/evaluation-run/test.sqlite3 --evaluation-dir TEST/evaluation-run/evaluation --output-dir dist
 ```
 
-배포 도구는 각 ZIP에 해당 소스 파일을 그대로 넣습니다. TEST ZIP에는 그 버전의 TEST 기억과 평가 자료도 포함합니다. CLEAN ZIP에는 프로그램 파일과 README가 들어갑니다. 개발 중 축적한 별도의 TEST 기억을 제공하려면 배포 도구에 해당 기억 파일과 평가 디렉터리를 지정합니다.
+TEST ZIP을 풀면 프로그램 코드, 테스트 기억 및 평가 자료가 있는 `TEST/`가 생성됩니다. CLEAN ZIP을 풀면 프로그램 코드와 README가 들어 있는 `CLEAN/`이 생성됩니다. 배포 도구는 각 폴더에 있는 코드를 그대로 포장합니다.

@@ -1,6 +1,7 @@
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -15,7 +16,12 @@ class ProgramIntegrationCase(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.database = Path(directory.name) / "memory.sqlite3"
+        self.workspace = Path(directory.name)
+        self.test_workspace = self.workspace / "TEST"
+        self.clean_workspace = self.workspace / "CLEAN"
+        self.test_workspace.mkdir()
+        self.clean_workspace.mkdir()
+        self.database = self.test_workspace / "memory.sqlite3"
 
     def run_cli(self, *arguments, expected_status=0):
         return self.run_test_cli(
@@ -23,15 +29,24 @@ class ProgramIntegrationCase(unittest.TestCase):
         )
 
     def run_clean_cli(self, *arguments, expected_status=0):
-        return self.run_program("selflearningai_clean.py", *arguments, expected_status=expected_status)
+        return self.run_program("CLEAN", *arguments, expected_status=expected_status)
 
     def run_test_cli(self, *arguments, expected_status=0):
-        return self.run_program("selflearningai_test.py", *arguments, expected_status=expected_status)
+        return self.run_program("TEST", *arguments, expected_status=expected_status)
 
-    def run_program(self, launcher, *arguments, expected_status):
+    def run_program(self, distribution, *arguments, expected_status):
+        destination = self.workspace / distribution
+        launcher = destination / "run.py"
+        if not launcher.is_file():
+            shutil.copytree(
+                ROOT / distribution,
+                destination,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("*.sqlite3*", "__pycache__", "evaluation"),
+            )
         result = subprocess.run(
-            [sys.executable, os.fspath(ROOT / launcher), *arguments],
-            cwd=self.database.parent,
+            [sys.executable, "-E", "-s", "-S", os.fspath(launcher), *arguments],
+            cwd=self.workspace,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -47,8 +62,8 @@ class ProgramIntegrationCase(unittest.TestCase):
 class CleanProgramIntegrationTest(ProgramIntegrationCase):
     def test_clean_and_test_memory_are_isolated(self):
         topic = "공원 운영"
-        clean_path = self.database.with_name("clean.sqlite3")
-        test_path = self.database.with_name("test.sqlite3")
+        clean_path = self.clean_workspace / "clean.sqlite3"
+        test_path = self.test_workspace / "test.sqlite3"
 
         self.assertIn("저장된 증거가 없습니다", self.run_clean_cli("기록", topic).stdout)
         self.assertTrue(clean_path.is_file())
@@ -73,16 +88,17 @@ class CleanProgramIntegrationTest(ProgramIntegrationCase):
         self.assertNotIn("테스트 공지", clean_history)
         self.assertIn("폐쇄 (출처 2개)", self.run_clean_cli("판단", topic).stdout)
         self.assertEqual(test_path.read_bytes(), test_baseline)
+        self.assertEqual(list(self.workspace.glob("*.sqlite3")), [])
 
     def test_launchers_cannot_switch_modes(self):
         for launcher, mode in ((self.run_clean_cli, "테스트"), (self.run_test_cli, "클린")):
             with self.subTest(mode=mode):
                 launcher("--모드", mode, "기록", "공원 운영", expected_status=2)
-        self.assertEqual(list(self.database.parent.glob("*.sqlite3")), [])
+        self.assertEqual(list(self.workspace.rglob("*.sqlite3")), [])
 
     def test_launchers_reject_other_memory_files_including_aliases(self):
         topic = "공원 운영"
-        clean_path = self.database.with_name("clean.sqlite3")
+        clean_path = self.clean_workspace / "clean.sqlite3"
         self.run_clean_cli("학습", topic, "개방", "관리소", "클린 공지")
         clean_baseline = clean_path.read_bytes()
         alias = self.database.with_name("별칭.sqlite3")
@@ -99,7 +115,7 @@ class CleanProgramIntegrationTest(ProgramIntegrationCase):
         self.assertEqual(clean_path.read_bytes(), clean_baseline)
 
         self.run_test_cli("학습", topic, "폐쇄", "관리소", "테스트 공지")
-        test_path = self.database.with_name("test.sqlite3")
+        test_path = self.test_workspace / "test.sqlite3"
         test_baseline = test_path.read_bytes()
         clean_path.unlink()
         os.link(test_path, clean_path)
@@ -112,7 +128,7 @@ class CleanProgramIntegrationTest(ProgramIntegrationCase):
         self.assertEqual(alias.read_bytes(), clean_baseline)
 
     def test_existing_marked_clean_memory_allows_learning(self):
-        clean_path = self.database.with_name("clean.sqlite3")
+        clean_path = self.clean_workspace / "clean.sqlite3"
         with sqlite3.connect(clean_path) as connection:
             connection.executescript("""
                 PRAGMA application_id = 0x534C4149;

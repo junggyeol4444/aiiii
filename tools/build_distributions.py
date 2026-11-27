@@ -9,8 +9,13 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TEST_PROGRAM = "selflearningai_test.py"
-CLEAN_PROGRAM = "selflearningai_clean.py"
+RUNTIME_FILES = (
+    "run.py",
+    "selflearningai/__init__.py",
+    "selflearningai/cli.py",
+    "selflearningai/memory.py",
+    "selflearningai/research.py",
+)
 TEST_APPLICATION_ID = 0x534C4154  # "SLAT"
 TEST_ARCHIVE = "SelfLearningAI-TEST.zip"
 CLEAN_ARCHIVE = "SelfLearningAI-CLEAN.zip"
@@ -62,18 +67,28 @@ def snapshot_test_database(source_path, snapshot_path):
             snapshot.execute("PRAGMA journal_mode = DELETE")
 
 
-def read_distribution_file(name):
-    path = ROOT / name
+def read_distribution_file(path):
     if not stat.S_ISREG(path.lstat().st_mode):
         raise ValueError(f"배포에 필요한 파일을 읽을 수 없습니다 ({path}).")
     return path.read_bytes()
 
 
+def read_edition_files(edition, readme):
+    root = ROOT / edition
+    for directory in (root, root / "selflearningai"):
+        if not stat.S_ISDIR(directory.lstat().st_mode):
+            raise ValueError(f"실제 프로그램 폴더가 필요합니다 ({directory}).")
+    files = {f"{edition}/README.md": readme}
+    for name in RUNTIME_FILES:
+        files[f"{edition}/{name}"] = read_distribution_file(root / name)
+    return files
+
+
 def build_distributions(test_db, evaluation_dir, output_dir):
     evaluations = evaluation_files(evaluation_dir)
-    readme = read_distribution_file("README.md")
-    test_program = read_distribution_file(TEST_PROGRAM)
-    clean_program = read_distribution_file(CLEAN_PROGRAM)
+    readme = read_distribution_file(ROOT / "README.md")
+    test_files = read_edition_files("TEST", readme)
+    clean_files = read_edition_files("CLEAN", readme)
     output_dir.mkdir(parents=True, exist_ok=True)
     destinations = [output_dir / name for name in (TEST_ARCHIVE, CLEAN_ARCHIVE)]
     for destination in destinations:
@@ -85,17 +100,17 @@ def build_distributions(test_db, evaluation_dir, output_dir):
         snapshot = temporary / "test.sqlite3"
         snapshot_test_database(test_db, snapshot)
         with ZipFile(temporary / TEST_ARCHIVE, "w", ZIP_DEFLATED, strict_timestamps=False) as archive:
-            archive.writestr("README.md", readme)
-            archive.writestr(TEST_PROGRAM, test_program)
-            archive.write(snapshot, "test.sqlite3")
+            for name, data in test_files.items():
+                archive.writestr(name, data)
+            archive.write(snapshot, "TEST/test.sqlite3")
             for relative in evaluations:
                 source = evaluation_dir / relative
                 if not stat.S_ISREG(source.lstat().st_mode):
                     raise ValueError(f"평가 파일이 생성 중 변경되었습니다 ({source}).")
-                archive.write(source, (Path("evaluation") / relative).as_posix())
+                archive.write(source, (Path("TEST/evaluation") / relative).as_posix())
         with ZipFile(temporary / CLEAN_ARCHIVE, "w", ZIP_DEFLATED, strict_timestamps=False) as archive:
-            archive.writestr("README.md", readme)
-            archive.writestr(CLEAN_PROGRAM, clean_program)
+            for name, data in clean_files.items():
+                archive.writestr(name, data)
         os.link(temporary / TEST_ARCHIVE, destinations[0])
         try:
             os.link(temporary / CLEAN_ARCHIVE, destinations[1])
