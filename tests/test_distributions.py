@@ -98,19 +98,24 @@ class DistributionIntegrationTest(unittest.TestCase):
                 encoding="utf-8",
             )
             text = workspace / "user-observations.txt"
-            text.write_text("주제: 수조 수위\n출처: 측정기\n관측: 수조 수위는 낮음입니다.\n", encoding="utf-8")
+            text.write_text(
+                "주제: 수조 수위\n출처: 측정기\n관측: 수조 수위는 낮음입니다.\n"
+                "\n출처: 계측 일지\n관측: 해당 주제는 낮음입니다.\n",
+                encoding="utf-8",
+            )
             learned = self.run_program(
                 clean_workspace / "run.py", "자율학습", "--자료", str(observations),
                 "--자료", str(text), "--계속", cwd=outside_cwd,
             )
             self.assertIn("선택한 학습 주제 — 수조 수위", learned.stdout)
-            self.assertIn("관측 2건을 통합", learned.stdout)
+            self.assertIn("관측 3건을 통합", learned.stdout)
             self.assertIn("선택한 학습 주제 — 정원 토양", learned.stdout)
             self.assertIn("학습할 새 관측이 없습니다", learned.stdout)
             clean_result = self.run_program(
                 clean_workspace / "run.py", "판단", "수조 수위", cwd=outside_cwd,
             )
             self.assertIn("잠정 판단 — 낮음", clean_result.stdout)
+            self.assertIn("낮음 (출처 3개)", clean_result.stdout)
 
             test_bytes = (test_workspace / "test.sqlite3").read_bytes()
             clean_file = clean_workspace / "clean.sqlite3"
