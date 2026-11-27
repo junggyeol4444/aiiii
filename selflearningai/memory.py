@@ -1,6 +1,13 @@
+import os
 import sqlite3
 import unicodedata
-from contextlib import closing
+from contextlib import closing, contextmanager
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+
+CLEAN_DATABASE_NAME = "clean.sqlite3"
+CLEAN_APPLICATION_ID = 0x534C4149  # "SLAI"
 
 
 CREATE_EVIDENCE = """
@@ -50,41 +57,90 @@ def normalize(text, label, limit):
     return text
 
 
+def initialize_schema(connection):
+    if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
+        return
+    connection.execute("BEGIN IMMEDIATE")
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if version == 1:
+        return
+    if version != 0:
+        raise ValueError(f"지원하지 않는 기억 파일 버전입니다 ({version}).")
+    legacy = connection.execute(
+        "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'evidence'"
+    ).fetchone()
+    if legacy:
+        connection.execute("ALTER TABLE evidence RENAME TO legacy_evidence")
+    connection.execute(CREATE_EVIDENCE)
+    if legacy:
+        connection.execute("""
+            INSERT INTO evidence (id, topic, value, source, note, recorded_at)
+            SELECT id, topic, value, source, note, recorded_at FROM legacy_evidence
+        """)
+        connection.execute("DROP TABLE legacy_evidence")
+    connection.execute(
+        "CREATE INDEX evidence_topic_source ON evidence (topic, source, id)"
+    )
+    connection.execute(LOCK_UPDATE)
+    connection.execute(LOCK_DELETE)
+    connection.execute(LOCK_REPLACE)
+    connection.execute("PRAGMA user_version = 1")
+
+
 class Memory:
-    def __init__(self, path):
-        self.path = path
+    def __init__(self, path, *, read_only=False):
+        self.path = Path(path).absolute()
+        self.read_only = read_only
+
+    def require_learning(self):
+        if self.read_only:
+            raise ValueError("클린 모드에서는 학습할 수 없습니다. 테스트 모드를 사용하세요.")
+        if (
+            self.path.name.casefold() == CLEAN_DATABASE_NAME
+            or self.path.resolve().name.casefold() == CLEAN_DATABASE_NAME
+        ):
+            raise ValueError("클린 기억 파일은 테스트 모드에서 사용할 수 없습니다.")
+
+    @contextmanager
+    def connect(self):
+        if self.read_only:
+            target = self.path.as_uri() + "?mode=ro"
+        else:
+            self.require_learning()
+            target = str(self.path)
+        with closing(sqlite3.connect(target, uri=self.read_only)) as connection:
+            application_id = connection.execute("PRAGMA application_id").fetchone()[0]
+            if self.read_only and application_id != CLEAN_APPLICATION_ID:
+                raise ValueError("클린 모드에는 별도로 초기화된 클린 기억 파일이 필요합니다.")
+            if not self.read_only and application_id == CLEAN_APPLICATION_ID:
+                raise ValueError("클린 기억 파일은 테스트 모드에서 사용할 수 없습니다.")
+            yield connection
 
     def initialize(self):
-        with closing(sqlite3.connect(self.path)) as connection, connection:
-            if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
-                return
-            connection.execute("BEGIN IMMEDIATE")
-            version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version == 1:
-                return
-            if version != 0:
-                raise ValueError(f"지원하지 않는 기억 파일 버전입니다 ({version}).")
-            legacy = connection.execute(
-                "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'evidence'"
-            ).fetchone()
-            if legacy:
-                connection.execute("ALTER TABLE evidence RENAME TO legacy_evidence")
-            connection.execute(CREATE_EVIDENCE)
-            if legacy:
-                connection.execute("""
-                    INSERT INTO evidence (id, topic, value, source, note, recorded_at)
-                    SELECT id, topic, value, source, note, recorded_at FROM legacy_evidence
-                """)
-                connection.execute("DROP TABLE legacy_evidence")
-            connection.execute(
-                "CREATE INDEX evidence_topic_source ON evidence (topic, source, id)"
-            )
-            connection.execute(LOCK_UPDATE)
-            connection.execute(LOCK_DELETE)
-            connection.execute(LOCK_REPLACE)
-            connection.execute("PRAGMA user_version = 1")
+        if self.read_only:
+            if not self.path.exists():
+                self.create_clean_database()
+            with self.connect() as connection:
+                if connection.execute("PRAGMA user_version").fetchone()[0] != 1:
+                    raise ValueError("지원하지 않는 클린 기억 파일 형식입니다.")
+        else:
+            with self.connect() as connection, connection:
+                initialize_schema(connection)
+
+    def create_clean_database(self):
+        # 초기화가 끝난 빈 DB만 공개해 동시 실행에서도 반쪽짜리 파일을 읽지 않는다.
+        with TemporaryDirectory(dir=self.path.parent) as directory:
+            temporary_path = Path(directory) / CLEAN_DATABASE_NAME
+            with closing(sqlite3.connect(temporary_path)) as connection, connection:
+                initialize_schema(connection)
+                connection.execute(f"PRAGMA application_id = {CLEAN_APPLICATION_ID}")
+            try:
+                os.link(temporary_path, self.path)
+            except FileExistsError:
+                pass
 
     def learn(self, topic, value, source, note):
+        self.require_learning()
         # 검사에 통과한 입력을 한 트랜잭션에서 통합한다.
         record = {
             "topic": normalize(topic, "주제", 200),
@@ -92,7 +148,7 @@ class Memory:
             "source": normalize(source, "출처", 500),
             "note": normalize(note, "증거", 4000),
         }
-        with closing(sqlite3.connect(self.path)) as connection, connection:
+        with self.connect() as connection, connection:
             cursor = connection.execute(
                 """
                 INSERT INTO evidence (topic, value, source, note)
@@ -112,7 +168,7 @@ class Memory:
 
     def assess(self, topic):
         topic = normalize(topic, "주제", 200)
-        with closing(sqlite3.connect(self.path)) as connection:
+        with self.connect() as connection:
             return connection.execute(
                 """
                 SELECT value, COUNT(*) AS votes
@@ -126,7 +182,7 @@ class Memory:
             ).fetchall()
 
     def next_exploration(self):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with self.connect() as connection:
             return connection.execute(
                 """
                 WITH latest AS (
@@ -167,7 +223,7 @@ class Memory:
 
     def history(self, topic):
         topic = normalize(topic, "주제", 200)
-        with closing(sqlite3.connect(self.path)) as connection:
+        with self.connect() as connection:
             return connection.execute(
                 """
                 SELECT id, value, source, note, recorded_at
