@@ -3,3 +3,5 @@ __pycache__/
 *.sqlite3-journal
 *.sqlite3-shm
 *.sqlite3-wal
+/evaluation-run/
+/dist/

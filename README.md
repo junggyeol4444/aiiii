@@ -4,19 +4,24 @@
 
 ## 실행
 
-저장소 루트에서 실행합니다. 실행 모드에 따라 기억 파일이 분리됩니다.
+SelfLearningAI의 개발 목표는 스스로 학습하고 이해하며 판단을 갱신하는 기본 지능입니다. 현재 구현 범위는 장기 기억, 증거에 따른 잠정 판단, 기억을 바탕으로 한 탐구입니다.
 
-- **클린 (기본)**은 `clean.sqlite3`를 사용합니다. 최초 조회 시 빈 기준 파일을 만들고 이후 읽기 전용으로 엽니다. `학습`과 `인용학습`은 차단됩니다.
-- **테스트**는 `test.sqlite3`를 사용하며 학습할 수 있습니다. `test.sqlite3`가 없고 이전 버전의 `memory.sqlite3`가 있으면 기존 파일을 테스트용으로 계속 사용합니다. `--기억파일 경로`를 지정하면 테스트 모드로 해당 파일을 사용합니다. 클린 파일은 이 옵션으로도 테스트용으로 열 수 없습니다.
+### TEST와 CLEAN
 
-아래는 가상 예시입니다. 모드 옵션은 명령 앞에 붙입니다.
+| 구분 | TEST | CLEAN |
+| --- | --- | --- |
+| 프로그램 코드와 학습 명령 | 동일 | 동일 |
+| 배포 시 기억 | 개발 중 얻은 지식·기억·경험 포함 | 빈 상태에서 시작 |
+| 평가 자료와 결과 | 포함 | 제외 |
+| 제공 후 학습 | 가능 | 가능 |
+
+압축을 푼 디렉터리 또는 저장소 루트에서 실행합니다. 기본 CLEAN 모드는 처음 실행할 때 빈 `clean.sqlite3`를 만들고, 이후 이 파일에 사용자의 학습 결과를 저장합니다. TEST 모드는 `test.sqlite3`를 사용합니다. 이전 버전의 `memory.sqlite3`는 `test.sqlite3`가 없을 때 TEST에서 이어서 사용합니다. `--기억파일 경로`는 별도 TEST 기억 파일을 지정합니다.
 
 ```bash
 python3 -m selflearningai --help
-python3 -m selflearningai --모드 테스트 학습 "공원의 야간 개방" "개방" "현장 관찰" "출입문이 열려 있었다."
-python3 -m selflearningai --모드 테스트 학습 "공원의 야간 개방" "폐쇄" "관리 공지" "야간 폐쇄 공지를 확인했다."
-python3 -m selflearningai --모드 테스트 판단 "공원의 야간 개방"
-python3 -m selflearningai --모드 클린 기록 "공원의 야간 개방"
+python3 -m selflearningai --모드 테스트 기록 "가상 관측소의 야간 운영"
+python3 -m selflearningai 학습 "공원의 야간 개방" "개방" "현장 관찰" "출입문이 열려 있었다."
+python3 -m selflearningai 판단 "공원의 야간 개방"
 ```
 
 ## 검사와 판단
@@ -56,3 +61,14 @@ python3 -m unittest discover -s tests -v
 ```
 
 실제 CLI를 여러 프로세스에서 실행해 기억 유지, 판단 보류와 변경, 기존 증거 보존, 입력 검사, 출처 정정, 이전 형식 기억 파일의 자동 변환, 클린과 테스트의 격리, 선택적 인용 해시 확인, 데이터베이스 잠금을 확인합니다.
+
+## 저장소에서 TEST와 CLEAN 배포본 만들기
+
+개발 중 학습·평가는 TEST 스냅샷에서 진행합니다. 아래 예는 새 디렉터리에서 가상 사례로 실제 학습과 평가를 실행한 뒤 두 배포본을 만듭니다. 개발 중 누적한 별도 TEST 기억을 배포할 때는 해당 TEST 데이터베이스와 그 평가 디렉터리를 지정합니다.
+
+```bash
+python3 tools/evaluate_learning.py --output-dir evaluation-run
+python3 tools/build_distributions.py --test-db evaluation-run/test.sqlite3 --evaluation-dir evaluation-run/evaluation --output-dir dist
+```
+
+`dist/SelfLearningAI-TEST.zip`과 `dist/SelfLearningAI-CLEAN.zip`에 동일한 실행 코드가 들어갑니다. TEST에는 `test.sqlite3`와 `evaluation/`이 함께 들어갑니다. CLEAN은 사용자가 펼쳐 실행할 때 빈 기억으로 시작합니다.

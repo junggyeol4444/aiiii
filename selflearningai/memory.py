@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 
 CLEAN_DATABASE_NAME = "clean.sqlite3"
 CLEAN_APPLICATION_ID = 0x534C4149  # "SLAI"
+TEST_APPLICATION_ID = 0x534C4154  # "SLAT"
 
 
 CREATE_EVIDENCE = """
@@ -58,9 +59,6 @@ def normalize(text, label, limit):
 
 
 def initialize_schema(connection):
-    if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
-        return
-    connection.execute("BEGIN IMMEDIATE")
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version == 1:
         return
@@ -88,50 +86,45 @@ def initialize_schema(connection):
 
 
 class Memory:
-    def __init__(self, path, *, read_only=False):
+    def __init__(self, path, *, test_mode=False):
         self.path = Path(path).absolute()
-        self.read_only = read_only
+        self.test_mode = test_mode
 
-    def require_learning(self):
-        if self.read_only:
-            raise ValueError("클린 모드에서는 학습할 수 없습니다. 테스트 모드를 사용하세요.")
-        if (
+    @contextmanager
+    def connect(self, *, initialize=False):
+        if self.test_mode and (
             self.path.name.casefold() == CLEAN_DATABASE_NAME
             or self.path.resolve().name.casefold() == CLEAN_DATABASE_NAME
         ):
             raise ValueError("클린 기억 파일은 테스트 모드에서 사용할 수 없습니다.")
 
-    @contextmanager
-    def connect(self):
-        if self.read_only:
-            target = self.path.as_uri() + "?mode=ro"
-        else:
-            self.require_learning()
-            target = str(self.path)
-        with closing(sqlite3.connect(target, uri=self.read_only)) as connection:
+        expected_id = TEST_APPLICATION_ID if self.test_mode else CLEAN_APPLICATION_ID
+        target = self.path.as_uri()
+        mode = "rwc" if self.test_mode and initialize else "rw"
+        with closing(sqlite3.connect(f"{target}?mode={mode}", uri=True)) as connection:
+            if initialize:
+                connection.execute("BEGIN IMMEDIATE")
             application_id = connection.execute("PRAGMA application_id").fetchone()[0]
-            if self.read_only and application_id != CLEAN_APPLICATION_ID:
-                raise ValueError("클린 모드에는 별도로 초기화된 클린 기억 파일이 필요합니다.")
-            if not self.read_only and application_id == CLEAN_APPLICATION_ID:
-                raise ValueError("클린 기억 파일은 테스트 모드에서 사용할 수 없습니다.")
+            legacy_test = self.test_mode and initialize and application_id == 0
+            if application_id != expected_id and not legacy_test:
+                label = "테스트" if self.test_mode else "클린"
+                raise ValueError(f"{label} 모드와 다른 종류의 기억 파일입니다. 테스트와 클린 파일을 분리하세요.")
             yield connection
 
     def initialize(self):
-        if self.read_only:
-            if not self.path.exists():
-                self.create_clean_database()
-            with self.connect() as connection:
-                if connection.execute("PRAGMA user_version").fetchone()[0] != 1:
-                    raise ValueError("지원하지 않는 클린 기억 파일 형식입니다.")
-        else:
-            with self.connect() as connection, connection:
-                initialize_schema(connection)
+        if not self.test_mode and not self.path.exists():
+            self.create_clean_database()
+        with self.connect(initialize=True) as connection, connection:
+            initialize_schema(connection)
+            if self.test_mode and connection.execute("PRAGMA application_id").fetchone()[0] == 0:
+                connection.execute(f"PRAGMA application_id = {TEST_APPLICATION_ID}")
 
     def create_clean_database(self):
         # 초기화가 끝난 빈 DB만 공개해 동시 실행에서도 반쪽짜리 파일을 읽지 않는다.
         with TemporaryDirectory(dir=self.path.parent) as directory:
             temporary_path = Path(directory) / CLEAN_DATABASE_NAME
             with closing(sqlite3.connect(temporary_path)) as connection, connection:
+                connection.execute("BEGIN IMMEDIATE")
                 initialize_schema(connection)
                 connection.execute(f"PRAGMA application_id = {CLEAN_APPLICATION_ID}")
             try:
@@ -140,7 +133,6 @@ class Memory:
                 pass
 
     def learn(self, topic, value, source, note):
-        self.require_learning()
         # 검사에 통과한 입력을 한 트랜잭션에서 통합한다.
         record = {
             "topic": normalize(topic, "주제", 200),
