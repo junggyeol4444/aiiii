@@ -22,6 +22,22 @@ def evaluate(directory, *, program=ROOT / "TEST" / "run.py"):
     document.write_text(f"{TOPIC}은 중단됐습니다.\n", encoding="utf-8")
     digest = hashlib.sha256(document.read_bytes()).hexdigest()
     document_argument = str(document.relative_to(directory))
+    observation_file = evaluation / "관측 기록.json"
+    next_topic = "가상 실험실의 주간 운영"
+    observations = [
+        (TOPIC, "중단", "관측 기록실", "야간 장비가 꺼져 있었습니다."),
+        (next_topic, "운영", "시설 안내", "주간 운영 시간이 공지됐습니다."),
+        (next_topic, "운영", "방문 기록", "주간에 출입할 수 있었습니다."),
+    ]
+    observation_file.write_text(
+        json.dumps(
+            [dict(zip(("주제", "주장", "출처", "증거"), record)) for record in observations],
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    automatic = ("자율학습", "--자료", str(observation_file.relative_to(directory)))
     database = directory / "test.sqlite3"
     steps = [
         (("학습", TOPIC, "운영", "예전 공지", "야간 운영이 예고됐습니다."), "증거 1번"),
@@ -32,11 +48,16 @@ def evaluate(directory, *, program=ROOT / "TEST" / "run.py"):
         (("학습", TOPIC, "중단", "현장 확인", "관측소 출입구가 닫혀 있었습니다."), "증거 3번"),
         (("판단", TOPIC), "잠정 판단 — 중단"),
         (("기록", TOPIC), "운영 | 예전 공지 | 야간 운영이 예고됐습니다."),
+        (automatic, f"선택한 학습 주제 — {TOPIC}"),
+        (("판단", TOPIC), "중단 (출처 3개)"),
+        (automatic, f"선택한 학습 주제 — {next_topic}"),
+        (("판단", next_topic), "운영 (출처 2개)"),
+        (automatic, "학습할 새 관측이 없습니다."),
     ]
     (evaluation / "시나리오.json").write_text(
         json.dumps(
             {
-                "설명": "합성 자료로 탐구, 인용 검사, 판단 갱신, 과거 기록 보존을 검증합니다.",
+                "설명": "합성 자료로 탐구, 인용 검사, 판단 갱신, 과거 기록 보존과 자율학습을 검증합니다.",
                 "단계": [{"명령": arguments, "기대 출력": expected} for arguments, expected in steps],
             },
             ensure_ascii=False,

@@ -14,6 +14,7 @@ RUNTIME_FILES = (
     "selflearningai/__init__.py",
     "selflearningai/cli.py",
     "selflearningai/memory.py",
+    "selflearningai/observations.py",
     "selflearningai/research.py",
 )
 TEST_APPLICATION_ID = 0x534C4154  # "SLAT"

@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -157,6 +158,106 @@ class CleanProgramIntegrationTest(ProgramIntegrationCase):
 
 
 class TestProgramIntegrationTest(ProgramIntegrationCase):
+    def learn_observations(self, *observations, expected_status=0):
+        fields = ("주제", "주장", "출처", "증거")
+        document = self.workspace / "관측.json"
+        document.write_text(
+            json.dumps([dict(zip(fields, observation)) for observation in observations], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return self.run_cli("자율학습", "--자료", str(document), expected_status=expected_status)
+
+    def test_autonomous_learning_selects_one_topic_by_distinct_sources_then_name(self):
+        park = "가로수길 공원 운영"
+        trail = "나루 산책로 운영"
+        garden = "다솜 정원 운영"
+        repeated = (garden, "개방", "현장", "문이 열려 있었다.")
+        self.learn_observations(
+            repeated, repeated, repeated,
+            (trail, "개방", "현장", "산책로를 이용할 수 있었다."),
+            (trail, "개방", "운영 공지", "입장할 수 있다고 적혀 있었다."),
+            (park, "개방", "현장", "정문이 열려 있었다."),
+            (park, "개방", "관리소", "운영 중으로 확인됐다."),
+            (park, "개방", "관리소", "운영 중으로 확인됐다."),
+        )
+        self.assertIn("개방 (출처 2개)", self.run_cli("판단", park).stdout)
+        self.assertEqual(len(self.run_cli("기록", park).stdout.splitlines()), 2)
+        for topic in (trail, garden):
+            self.assertIn("저장된 증거가 없습니다", self.run_cli("기록", topic).stdout)
+
+    def test_autonomous_learning_follows_exploration_rank_for_uncertain_topics(self):
+        tie = "공원의 야간 개방"
+        singleton = "도서관의 주말 개관"
+        new_topic = "체육관의 오전 운영"
+        replay_only = "천문대의 야간 관측"
+        self.run_cli("학습", tie, "개방", "관리소", "지난 공지는 개방이었다.")
+        self.run_cli("학습", tie, "폐쇄", "현장", "출입 통제 중이었다.")
+        self.run_cli("학습", singleton, "개관", "도서관", "기존 공지에 적혀 있었다.")
+        self.run_cli("학습", replay_only, "운영", "천문대", "이전 일정에 적혀 있었다.")
+        self.run_cli("학습", replay_only, "중단", "현장", "장비 점검 중이었다.")
+
+        self.learn_observations(
+            (replay_only, "운영", "천문대", "이전 일정에 적혀 있었다."),
+            (singleton, "개관", "현장", "출입문이 열려 있었다."),
+            (new_topic, "운영", "현장", "실내 운동장이 열려 있었다."),
+            (new_topic, "운영", "관리소", "운영 시간표에 적혀 있었다."),
+            (new_topic, "운영", "별도 문의", "예약 가능한 시간이었다."),
+            (tie, "폐쇄", "현장 문의", "입장할 수 없었다."),
+            (tie, "폐쇄", "새 공지", "폐쇄 일정이 안내됐다."),
+        )
+        self.assertIn("폐쇄 (출처 3개)", self.run_cli("판단", tie).stdout)
+        self.assertIn("지난 공지는 개방이었다.", self.run_cli("기록", tie).stdout)
+        self.assertEqual(len(self.run_cli("기록", singleton).stdout.splitlines()), 1)
+        self.assertIn("저장된 증거가 없습니다", self.run_cli("기록", new_topic).stdout)
+
+    def test_autonomous_learning_ignores_historical_replay(self):
+        topic = "관측소 운영"
+        original = (topic, "운영", "관측소", "첫 일정에 운영으로 적혀 있었다.")
+        revision = (topic, "중단", "관측소", "정정 일정에 중단으로 적혀 있었다.")
+        self.learn_observations(original)
+        self.learn_observations(revision)
+        previous_history = self.run_cli("기록", topic).stdout
+        self.assertIn(original[3], previous_history)
+        self.assertIn(revision[3], previous_history)
+
+        previous_database = self.database.read_bytes()
+        self.learn_observations(original)
+        self.assertEqual(self.database.read_bytes(), previous_database)
+        self.assertEqual(self.run_cli("기록", topic).stdout, previous_history)
+        self.assertIn("잠정 판단 — 중단", self.run_cli("판단", topic).stdout)
+
+    def test_autonomous_learning_rejects_invalid_or_conflicting_batches(self):
+        topic = "공원 운영"
+        valid = (topic, "개방", "관리소", "운영을 공지했다.")
+        invalid = (topic, "폐쇄", "현장", "   ")
+        conflicting = (" 공원  운영 ", "폐쇄", " 관리소 ", "폐쇄를 공지했다.")
+        too_many = [(topic, "개방", f"출처 {index}", "관측했다.") for index in range(101)]
+
+        for data in ((valid, invalid), (valid, conflicting), too_many):
+            with self.subTest(count=len(data), last_note=data[-1][3]):
+                self.learn_observations(*data, expected_status=None)
+                self.assertIn("저장된 증거가 없습니다", self.run_cli("기록", topic).stdout)
+
+    def test_autonomous_learning_rolls_back_when_second_record_cannot_be_saved(self):
+        topic = "공원 운영"
+        self.run_cli("기록", topic)
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("""
+                CREATE TRIGGER reject_second_observation
+                BEFORE INSERT ON evidence
+                WHEN EXISTS (SELECT 1 FROM evidence WHERE topic = NEW.topic)
+                BEGIN
+                    SELECT RAISE(ABORT, 'second observation rejected');
+                END
+            """)
+        failure = self.learn_observations(
+            (topic, "개방", "관리소", "운영을 공지했다."),
+            (topic, "개방", "현장", "출입문이 열려 있었다."),
+            expected_status=None,
+        )
+        self.assertIn("second observation rejected", failure.stderr)
+        self.assertIn("저장된 증거가 없습니다", self.run_cli("기록", topic).stdout)
+
     def test_evidence_changes_judgment_and_preserves_history(self):
         topic = "공원의 야간 개방"
         self.assertIn("저장된 증거가 없습니다", self.run_cli("판단", topic).stdout)

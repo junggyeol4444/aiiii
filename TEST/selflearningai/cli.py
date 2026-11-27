@@ -3,6 +3,7 @@ import sqlite3
 from pathlib import Path
 
 from .memory import CLEAN_DATABASE_NAME, Memory, normalize
+from .observations import load_observations
 from .research import display_text, find_passages, verify_passage
 
 
@@ -27,6 +28,8 @@ def main(*, test_mode):
         cite.add_argument(label)
     cite.add_argument("줄번호", type=int)
     cite.add_argument("sha256", metavar="SHA-256", nargs="?")
+    automatic = commands.add_parser("자율학습", help="관측 자료에서 주제를 선택해 학습")
+    automatic.add_argument("--자료", dest="observations", required=True, metavar="JSON")
     args = parser.parse_args()
     program_dir = Path(__file__).resolve().parents[1]
     path = program_dir / CLEAN_DATABASE_NAME
@@ -38,6 +41,18 @@ def main(*, test_mode):
             path = legacy if not default.exists() and legacy.is_file() else default
     memory = Memory(path, test_mode=test_mode)
     try:
+        if args.command == "자율학습":
+            observations = load_observations(args.observations)
+            memory.initialize()
+            outcome = memory.learn_from_observations(observations)
+            if outcome is None:
+                print("학습할 새 관측이 없습니다.")
+            else:
+                topic, count = outcome
+                print(f"선택한 학습 주제 — {topic}")
+                print(f"관측 {count}건을 통합하고 잠갔습니다.")
+            return
+
         memory.initialize()
         if args.command == "학습":
             entry = memory.learn(args.주제, args.주장, args.출처, args.증거)

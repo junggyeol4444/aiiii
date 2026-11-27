@@ -85,6 +85,54 @@ def initialize_schema(connection):
     connection.execute("PRAGMA user_version = 1")
 
 
+def select_exploration(connection, topics=()):
+    # 값은 SQLite 매개변수로 전달하며, SQL에는 자리표시자만 추가한다.
+    topic_filter = ""
+    if topics:
+        placeholders = ", ".join("?" for _ in topics)
+        topic_filter = f"WHERE topic IN ({placeholders})"
+    return connection.execute(
+        f"""
+        WITH latest AS (
+            SELECT MAX(id) AS id FROM evidence
+            {topic_filter}
+            GROUP BY topic, source
+        ),
+        support AS (
+            SELECT topic, value, COUNT(*) AS votes, MAX(evidence.id) AS newest
+            FROM latest JOIN evidence ON evidence.id = latest.id
+            GROUP BY topic, value
+        ),
+        ranked AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY topic ORDER BY votes DESC, value
+                   ) AS position
+            FROM support
+        ),
+        topics AS (
+            SELECT topic, SUM(votes) AS sources, MAX(newest) AS newest,
+                   MAX(CASE WHEN position = 1 THEN value END) AS leading_value,
+                   MAX(CASE WHEN position = 2 THEN value END) AS other_value,
+                   MAX(CASE WHEN position = 1 THEN votes END) AS leading_votes,
+                   MAX(CASE WHEN position = 2 THEN votes END) AS other_votes
+            FROM ranked GROUP BY topic
+        )
+        SELECT topic, sources, leading_value, other_value, leading_votes, other_votes
+        FROM topics
+        WHERE other_votes IS NOT NULL OR sources = 1
+        ORDER BY CASE
+                     WHEN leading_votes = other_votes THEN 0
+                     WHEN other_votes IS NOT NULL THEN 1
+                     ELSE 2
+                 END,
+                 leading_votes - other_votes, newest DESC, topic
+        LIMIT 1
+        """,
+        topics,
+    ).fetchone()
+
+
 class Memory:
     def __init__(self, path, *, test_mode=False):
         self.path = Path(path).absolute()
@@ -173,45 +221,48 @@ class Memory:
                 (topic,),
             ).fetchall()
 
+    def learn_from_observations(self, observations):
+        # 같은 출처의 서로 다른 두 기록에는 어느 쪽이 최신인지 나타나 있지 않다.
+        unique = {}
+        for topic, value, source, note in observations:
+            key = (topic, source)
+            record = (topic, value, source, note)
+            if key in unique and unique[key] != record:
+                raise ValueError(f"같은 주제와 출처에 서로 다른 관측이 있습니다: {topic} / {source}")
+            unique[key] = record
+
+        with self.connect() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            by_topic = {}
+            for record in unique.values():
+                known = connection.execute(
+                    """
+                    SELECT 1 FROM evidence
+                    WHERE topic = ? AND value = ? AND source = ? AND note = ?
+                    LIMIT 1
+                    """,
+                    record,
+                ).fetchone()
+                if known is None:
+                    by_topic.setdefault(record[0], []).append(record)
+            if not by_topic:
+                return None
+
+            candidate = select_exploration(connection, tuple(by_topic))
+            if candidate:
+                topic = candidate[0]
+            else:
+                topic = min(by_topic, key=lambda name: (-len(by_topic[name]), name))
+            records = by_topic[topic]
+            connection.executemany(
+                "INSERT INTO evidence (topic, value, source, note) VALUES (?, ?, ?, ?)",
+                records,
+            )
+            return topic, len(records)
+
     def next_exploration(self):
         with self.connect() as connection:
-            return connection.execute(
-                """
-                WITH latest AS (
-                    SELECT MAX(id) AS id FROM evidence GROUP BY topic, source
-                ),
-                support AS (
-                    SELECT topic, value, COUNT(*) AS votes, MAX(evidence.id) AS newest
-                    FROM latest JOIN evidence ON evidence.id = latest.id
-                    GROUP BY topic, value
-                ),
-                ranked AS (
-                    SELECT *,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY topic ORDER BY votes DESC, value
-                           ) AS position
-                    FROM support
-                ),
-                topics AS (
-                    SELECT topic, SUM(votes) AS sources, MAX(newest) AS newest,
-                           MAX(CASE WHEN position = 1 THEN value END) AS leading_value,
-                           MAX(CASE WHEN position = 2 THEN value END) AS other_value,
-                           MAX(CASE WHEN position = 1 THEN votes END) AS leading_votes,
-                           MAX(CASE WHEN position = 2 THEN votes END) AS other_votes
-                    FROM ranked GROUP BY topic
-                )
-                SELECT topic, sources, leading_value, other_value, leading_votes, other_votes
-                FROM topics
-                WHERE other_votes IS NOT NULL OR sources = 1
-                ORDER BY CASE
-                             WHEN leading_votes = other_votes THEN 0
-                             WHEN other_votes IS NOT NULL THEN 1
-                             ELSE 2
-                         END,
-                         leading_votes - other_votes, newest DESC, topic
-                LIMIT 1
-                """
-            ).fetchone()
+            return select_exploration(connection)
 
     def history(self, topic):
         topic = normalize(topic, "주제", 200)
