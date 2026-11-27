@@ -24,7 +24,7 @@ def evaluate(directory):
     digest = hashlib.sha256(document.read_bytes()).hexdigest()
     document_argument = str(document.relative_to(directory))
     database = directory / "test.sqlite3"
-    environment = {**os.environ, "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8"}
+    environment = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     steps = [
         (("학습", TOPIC, "운영", "예전 공지", "야간 운영이 예고됐습니다."), "증거 1번"),
         (("판단", TOPIC), "잠정 판단 — 운영"),
@@ -49,7 +49,7 @@ def evaluate(directory):
     results = []
     for arguments, expected in steps:
         result = subprocess.run(
-            [sys.executable, "-m", "selflearningai", "--모드", "테스트", *arguments],
+            [sys.executable, str(ROOT / "selflearningai_test.py"), *arguments],
             cwd=directory,
             env=environment,
             capture_output=True,

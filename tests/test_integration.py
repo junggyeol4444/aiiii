@@ -18,15 +18,20 @@ class MemoryIntegrationTest(unittest.TestCase):
         self.database = Path(directory.name) / "memory.sqlite3"
 
     def run_cli(self, *arguments, expected_status=0):
-        return self.run_memory_cli(
+        return self.run_test_cli(
             "--기억파일", os.fspath(self.database), *arguments, expected_status=expected_status,
         )
 
-    def run_memory_cli(self, *arguments, expected_status=0):
+    def run_clean_cli(self, *arguments, expected_status=0):
+        return self.run_program("selflearningai_clean.py", *arguments, expected_status=expected_status)
+
+    def run_test_cli(self, *arguments, expected_status=0):
+        return self.run_program("selflearningai_test.py", *arguments, expected_status=expected_status)
+
+    def run_program(self, launcher, *arguments, expected_status):
         result = subprocess.run(
-            [sys.executable, "-m", "selflearningai", *arguments],
+            [sys.executable, os.fspath(ROOT / launcher), *arguments],
             cwd=self.database.parent,
-            env={**os.environ, "PYTHONPATH": os.fspath(ROOT)},
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -43,51 +48,55 @@ class MemoryIntegrationTest(unittest.TestCase):
         clean_path = self.database.with_name("clean.sqlite3")
         test_path = self.database.with_name("test.sqlite3")
 
-        self.assertIn("저장된 증거가 없습니다", self.run_memory_cli("기록", topic).stdout)
+        self.assertIn("저장된 증거가 없습니다", self.run_clean_cli("기록", topic).stdout)
         self.assertTrue(clean_path.is_file())
         self.assertFalse(test_path.exists())
 
-        self.run_memory_cli("--모드", "테스트", "학습", topic, "개방", "관리소", "테스트 공지")
+        self.run_test_cli("학습", topic, "개방", "관리소", "테스트 공지")
         self.assertTrue(test_path.is_file())
         test_baseline = test_path.read_bytes()
 
-        test_history = self.run_memory_cli("--모드", "테스트", "기록", topic).stdout
+        test_history = self.run_test_cli("기록", topic).stdout
         self.assertIn("개방 | 관리소 | 테스트 공지", test_history)
-        clean_history = self.run_memory_cli("--모드", "클린", "기록", topic).stdout
+        clean_history = self.run_clean_cli("기록", topic).stdout
         self.assertIn("저장된 증거가 없습니다", clean_history)
 
-        self.run_memory_cli("학습", topic, "폐쇄", "사용자 관찰", "정문이 닫혀 있었다.")
+        self.run_clean_cli("학습", topic, "폐쇄", "사용자 관찰", "정문이 닫혀 있었다.")
         document = self.database.with_name("공지.txt")
         document.write_text("공원 운영은 야간에 중단된다.", encoding="utf-8")
-        self.run_memory_cli(
-            "--모드", "클린", "인용학습", topic, "폐쇄", "관리소", str(document), "1"
-        )
-        clean_history = self.run_memory_cli("기록", topic).stdout
+        self.run_clean_cli("인용학습", topic, "폐쇄", "관리소", str(document), "1")
+        clean_history = self.run_clean_cli("기록", topic).stdout
         self.assertIn("폐쇄 | 사용자 관찰 | 정문이 닫혀 있었다.", clean_history)
         self.assertIn("공원 운영은 야간에 중단된다.", clean_history)
         self.assertNotIn("테스트 공지", clean_history)
-        self.assertIn("폐쇄 (출처 2개)", self.run_memory_cli("판단", topic).stdout)
+        self.assertIn("폐쇄 (출처 2개)", self.run_clean_cli("판단", topic).stdout)
         self.assertEqual(test_path.read_bytes(), test_baseline)
 
-    def test_modes_reject_other_memory_files_including_aliases(self):
+    def test_launchers_cannot_switch_modes(self):
+        for launcher, mode in ((self.run_clean_cli, "테스트"), (self.run_test_cli, "클린")):
+            with self.subTest(mode=mode):
+                launcher("--모드", mode, "기록", "공원 운영", expected_status=2)
+        self.assertEqual(list(self.database.parent.glob("*.sqlite3")), [])
+
+    def test_launchers_reject_other_memory_files_including_aliases(self):
         topic = "공원 운영"
         clean_path = self.database.with_name("clean.sqlite3")
-        self.run_memory_cli("학습", topic, "개방", "관리소", "클린 공지")
+        self.run_clean_cli("학습", topic, "개방", "관리소", "클린 공지")
         clean_baseline = clean_path.read_bytes()
         alias = self.database.with_name("별칭.sqlite3")
         os.link(clean_path, alias)
 
         for path in (clean_path, alias):
             with self.subTest(path=path):
-                rejected = self.run_memory_cli(
-                    "--모드", "테스트", "--기억파일", str(path),
+                rejected = self.run_test_cli(
+                    "--기억파일", str(path),
                     "학습", topic, "개방", "관리소", "운영 공지",
                     expected_status=None,
                 )
                 self.assertIn("클린", rejected.stderr)
         self.assertEqual(clean_path.read_bytes(), clean_baseline)
 
-        self.run_memory_cli("--모드", "테스트", "학습", topic, "폐쇄", "관리소", "테스트 공지")
+        self.run_test_cli("학습", topic, "폐쇄", "관리소", "테스트 공지")
         test_path = self.database.with_name("test.sqlite3")
         test_baseline = test_path.read_bytes()
         clean_path.unlink()
@@ -95,7 +104,7 @@ class MemoryIntegrationTest(unittest.TestCase):
 
         for command in (("기록", topic), ("학습", topic, "개방", "관리소", "덮어쓰기 시도")):
             with self.subTest(command=command):
-                rejected = self.run_memory_cli("--모드", "클린", *command, expected_status=None)
+                rejected = self.run_clean_cli(*command, expected_status=None)
                 self.assertIn("테스트", rejected.stderr)
         self.assertEqual(test_path.read_bytes(), test_baseline)
         self.assertEqual(alias.read_bytes(), clean_baseline)
@@ -116,21 +125,17 @@ class MemoryIntegrationTest(unittest.TestCase):
                 );
             """)
 
-        self.run_memory_cli("학습", "공원 운영", "개방", "관리소", "새 공지")
-        self.assertIn("개방 | 관리소 | 새 공지", self.run_memory_cli("기록", "공원 운영").stdout)
+        self.run_clean_cli("학습", "공원 운영", "개방", "관리소", "새 공지")
+        self.assertIn("개방 | 관리소 | 새 공지", self.run_clean_cli("기록", "공원 운영").stdout)
 
-    def test_legacy_memory_is_only_visible_in_test_mode(self):
+    def test_legacy_memory_is_only_visible_in_test_launcher(self):
         topic = "공원 운영"
         self.run_cli("학습", topic, "개방", "관리소", "기존 공지")
-        self.assertIn("저장된 증거가 없습니다", self.run_memory_cli("기록", topic).stdout)
-        test_history = self.run_memory_cli("--모드", "테스트", "기록", topic).stdout
+        self.assertIn("저장된 증거가 없습니다", self.run_clean_cli("기록", topic).stdout)
+        test_history = self.run_test_cli("기록", topic).stdout
         self.assertIn("개방 | 관리소 | 기존 공지", test_history)
 
-        rejected = self.run_memory_cli(
-            "--모드", "클린", "--기억파일", str(self.database), "기록", topic,
-            expected_status=None,
-        )
-        self.assertIn("기억파일", rejected.stderr)
+        self.run_clean_cli("--기억파일", str(self.database), "기록", topic, expected_status=2)
 
     def test_evidence_changes_judgment_and_preserves_history(self):
         topic = "공원의 야간 개방"

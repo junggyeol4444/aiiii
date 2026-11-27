@@ -9,13 +9,15 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCTION_FILES = (
+SHARED_FILES = (
     "README.md",
     "selflearningai/__init__.py",
-    "selflearningai/__main__.py",
+    "selflearningai/cli.py",
     "selflearningai/memory.py",
     "selflearningai/research.py",
 )
+TEST_LAUNCHER = "selflearningai_test.py"
+CLEAN_LAUNCHER = "selflearningai_clean.py"
 TEST_APPLICATION_ID = 0x534C4154  # "SLAT"
 TEST_ARCHIVE = "SelfLearningAI-TEST.zip"
 CLEAN_ARCHIVE = "SelfLearningAI-CLEAN.zip"
@@ -67,9 +69,9 @@ def snapshot_test_database(source_path, snapshot_path):
             snapshot.execute("PRAGMA journal_mode = DELETE")
 
 
-def read_production_files():
+def read_production_files(names):
     files = {}
-    for name in PRODUCTION_FILES:
+    for name in names:
         path = ROOT / name
         if not stat.S_ISREG(path.lstat().st_mode):
             raise ValueError(f"배포에 필요한 소스 파일을 읽을 수 없습니다 ({path}).")
@@ -79,7 +81,8 @@ def read_production_files():
 
 def build_distributions(test_db, evaluation_dir, output_dir):
     evaluations = evaluation_files(evaluation_dir)
-    production = read_production_files()
+    production = read_production_files(SHARED_FILES)
+    launchers = read_production_files((TEST_LAUNCHER, CLEAN_LAUNCHER))
     output_dir.mkdir(parents=True, exist_ok=True)
     destinations = [output_dir / name for name in (TEST_ARCHIVE, CLEAN_ARCHIVE)]
     for destination in destinations:
@@ -93,6 +96,7 @@ def build_distributions(test_db, evaluation_dir, output_dir):
         with ZipFile(temporary / TEST_ARCHIVE, "w", ZIP_DEFLATED, strict_timestamps=False) as archive:
             for name, data in production.items():
                 archive.writestr(name, data)
+            archive.writestr(TEST_LAUNCHER, launchers[TEST_LAUNCHER])
             archive.write(snapshot, "test.sqlite3")
             for relative in evaluations:
                 source = evaluation_dir / relative
@@ -102,6 +106,7 @@ def build_distributions(test_db, evaluation_dir, output_dir):
         with ZipFile(temporary / CLEAN_ARCHIVE, "w", ZIP_DEFLATED, strict_timestamps=False) as archive:
             for name, data in production.items():
                 archive.writestr(name, data)
+            archive.writestr(CLEAN_LAUNCHER, launchers[CLEAN_LAUNCHER])
         os.link(temporary / TEST_ARCHIVE, destinations[0])
         try:
             os.link(temporary / CLEAN_ARCHIVE, destinations[1])

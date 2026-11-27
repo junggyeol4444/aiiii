@@ -6,10 +6,11 @@ from .memory import CLEAN_DATABASE_NAME, Memory, normalize
 from .research import display_text, find_passages, verify_passage
 
 
-def main():
-    parser = argparse.ArgumentParser(description="SelfLearningAI 장기 기억과 탐구")
-    parser.add_argument("--모드", dest="mode", choices=("클린", "테스트"), help="기본값은 클린")
-    parser.add_argument("--기억파일", dest="database", help="테스트용 기억 파일 경로")
+def main(*, test_mode):
+    edition = "TEST" if test_mode else "CLEAN"
+    parser = argparse.ArgumentParser(description=f"SelfLearningAI {edition} 장기 기억과 탐구")
+    if test_mode:
+        parser.add_argument("--기억파일", dest="database", help="테스트용 기억 파일 경로")
     commands = parser.add_subparsers(dest="command", required=True)
     learn = commands.add_parser("학습", help="출처와 증거를 기억에 통합")
     for label in ("주제", "주장", "출처", "증거"):
@@ -27,9 +28,6 @@ def main():
     cite.add_argument("줄번호", type=int)
     cite.add_argument("sha256", metavar="SHA-256", nargs="?")
     args = parser.parse_args()
-    if args.mode == "클린" and args.database is not None:
-        parser.error("--기억파일은 테스트 모드에서만 사용할 수 있습니다.")
-    test_mode = args.mode == "테스트" or args.database is not None
     path = CLEAN_DATABASE_NAME
     if test_mode:
         legacy = Path("memory.sqlite3")
@@ -98,7 +96,3 @@ def main():
                 print(f"{entry}. {value} | {source} | {note} | {timestamp} UTC")
     except (ValueError, OSError, sqlite3.Error) as error:
         parser.exit(1, f"오류 — {error}\n")
-
-
-if __name__ == "__main__":
-    main()
