@@ -11,14 +11,18 @@ CLEAN_APPLICATION_ID = 0x534C4149  # "SLAI"
 TEST_APPLICATION_ID = 0x534C4154  # "SLAT"
 
 
-CREATE_EVIDENCE = """
+SCHEMA_VERSION = 2
+NEGATION_COLUMN = "negated INTEGER NOT NULL DEFAULT 0 CHECK (negated IN (0, 1))"
+
+CREATE_EVIDENCE = f"""
 CREATE TABLE IF NOT EXISTS evidence (
     id INTEGER PRIMARY KEY,
     topic TEXT NOT NULL,
     value TEXT NOT NULL,
     source TEXT NOT NULL,
     note TEXT NOT NULL,
-    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    {NEGATION_COLUMN}
 );
 """
 
@@ -60,7 +64,14 @@ def normalize(text, label, limit):
 
 def initialize_schema(connection):
     version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if version == SCHEMA_VERSION:
+        return
     if version == 1:
+        connection.execute(f"ALTER TABLE evidence ADD COLUMN {NEGATION_COLUMN}")
+        connection.execute(LOCK_UPDATE)
+        connection.execute(LOCK_DELETE)
+        connection.execute(LOCK_REPLACE)
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         return
     if version != 0:
         raise ValueError(f"지원하지 않는 기억 파일 버전입니다 ({version}).")
@@ -82,7 +93,7 @@ def initialize_schema(connection):
     connection.execute(LOCK_UPDATE)
     connection.execute(LOCK_DELETE)
     connection.execute(LOCK_REPLACE)
-    connection.execute("PRAGMA user_version = 1")
+    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def select_exploration(connection, topics=()):
@@ -99,14 +110,14 @@ def select_exploration(connection, topics=()):
             GROUP BY topic, source
         ),
         support AS (
-            SELECT topic, value, COUNT(*) AS votes, MAX(evidence.id) AS newest
+            SELECT topic, value, negated, COUNT(*) AS votes, MAX(evidence.id) AS newest
             FROM latest JOIN evidence ON evidence.id = latest.id
-            GROUP BY topic, value
+            GROUP BY topic, value, negated
         ),
         ranked AS (
             SELECT *,
                    ROW_NUMBER() OVER (
-                       PARTITION BY topic ORDER BY votes DESC, value
+                       PARTITION BY topic ORDER BY votes DESC, value, negated
                    ) AS position
             FROM support
         ),
@@ -115,10 +126,13 @@ def select_exploration(connection, topics=()):
                    MAX(CASE WHEN position = 1 THEN value END) AS leading_value,
                    MAX(CASE WHEN position = 2 THEN value END) AS other_value,
                    MAX(CASE WHEN position = 1 THEN votes END) AS leading_votes,
-                   MAX(CASE WHEN position = 2 THEN votes END) AS other_votes
+                   MAX(CASE WHEN position = 2 THEN votes END) AS other_votes,
+                   MAX(CASE WHEN position = 1 THEN negated END) AS leading_negated,
+                   MAX(CASE WHEN position = 2 THEN negated END) AS other_negated
             FROM ranked GROUP BY topic
         )
-        SELECT topic, sources, leading_value, other_value, leading_votes, other_votes
+        SELECT topic, sources, leading_value, other_value, leading_votes, other_votes,
+               leading_negated, other_negated
         FROM topics
         WHERE other_votes IS NOT NULL OR sources = 1
         ORDER BY CASE
@@ -180,24 +194,25 @@ class Memory:
             except FileExistsError:
                 pass
 
-    def learn(self, topic, value, source, note):
+    def learn(self, topic, value, source, note, *, negated=False):
         # 검사에 통과한 입력을 한 트랜잭션에서 통합한다.
         record = {
             "topic": normalize(topic, "주제", 200),
             "value": normalize(value, "주장", 500),
             "source": normalize(source, "출처", 500),
             "note": normalize(note, "증거", 4000),
+            "negated": negated,
         }
         with self.connect() as connection, connection:
             cursor = connection.execute(
                 """
-                INSERT INTO evidence (topic, value, source, note)
-                SELECT :topic, :value, :source, :note
+                INSERT INTO evidence (topic, value, source, note, negated)
+                SELECT :topic, :value, :source, :note, :negated
                 WHERE NOT EXISTS (
                     SELECT 1 FROM evidence
                     WHERE id = (
                         SELECT MAX(id) FROM evidence WHERE topic = :topic AND source = :source
-                    ) AND value = :value AND note = :note
+                    ) AND value = :value AND note = :note AND negated = :negated
                 )
                 """,
                 record,
@@ -211,22 +226,34 @@ class Memory:
         with self.connect() as connection:
             return connection.execute(
                 """
-                SELECT value, COUNT(*) AS votes
+                SELECT value, COUNT(*) AS votes, negated
                 FROM evidence
                 WHERE id IN (
                     SELECT MAX(id) FROM evidence WHERE topic = ? GROUP BY source
                 )
-                GROUP BY value ORDER BY votes DESC, value
+                GROUP BY value, negated ORDER BY votes DESC, value, negated
                 """,
                 (topic,),
             ).fetchall()
 
+    def verify_claim(self, topic, claim):
+        claim = normalize(claim, "주장", 500)
+        support = refutation = other = 0
+        for value, count, negated in self.assess(topic):
+            if value != claim:
+                other += count
+            elif negated:
+                refutation += count
+            else:
+                support += count
+        return support, refutation, other
+
     def learn_from_observations(self, observations):
         # 같은 출처의 서로 다른 두 기록에는 어느 쪽이 최신인지 나타나 있지 않다.
         unique = {}
-        for topic, value, source, note in observations:
+        for record in observations:
+            topic, _, source, _, _ = record
             key = (topic, source)
-            record = (topic, value, source, note)
             if key in unique and unique[key] != record:
                 raise ValueError(f"같은 주제와 출처에 서로 다른 관측이 있습니다: {topic} / {source}")
             unique[key] = record
@@ -238,7 +265,7 @@ class Memory:
                 known = connection.execute(
                     """
                     SELECT 1 FROM evidence
-                    WHERE topic = ? AND value = ? AND source = ? AND note = ?
+                    WHERE topic = ? AND value = ? AND source = ? AND note = ? AND negated = ?
                     LIMIT 1
                     """,
                     record,
@@ -255,7 +282,7 @@ class Memory:
                 topic = min(by_topic, key=lambda name: (-len(by_topic[name]), name))
             records = by_topic[topic]
             connection.executemany(
-                "INSERT INTO evidence (topic, value, source, note) VALUES (?, ?, ?, ?)",
+                "INSERT INTO evidence (topic, value, source, note, negated) VALUES (?, ?, ?, ?, ?)",
                 records,
             )
             return topic, len(records)
@@ -269,7 +296,7 @@ class Memory:
         with self.connect() as connection:
             return connection.execute(
                 """
-                SELECT id, value, source, note, recorded_at
+                SELECT id, value, source, note, recorded_at, negated
                 FROM evidence WHERE topic = ? ORDER BY id
                 """,
                 (topic,),

@@ -58,12 +58,17 @@ def snapshot_test_database(source_path, snapshot_path):
             source.backup(snapshot)
             application_id = snapshot.execute("PRAGMA application_id").fetchone()[0]
             version = snapshot.execute("PRAGMA user_version").fetchone()[0]
-            if application_id != TEST_APPLICATION_ID or version != 1:
+            if application_id == TEST_APPLICATION_ID and version == 1:
+                raise ValueError(
+                    f"이전 TEST 기억 파일입니다 ({source_path}). "
+                    "새 TEST의 기록 명령으로 열어 형식을 변환한 뒤 다시 실행하세요."
+                )
+            if application_id != TEST_APPLICATION_ID or version != 2:
                 raise ValueError(f"지원하는 SelfLearningAI 테스트 기억 파일이 필요합니다 ({source_path}).")
             if snapshot.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
                 raise ValueError(f"테스트 기억 파일 무결성 검사에 실패했습니다 ({source_path}).")
             snapshot.execute(
-                "SELECT id, topic, value, source, note, recorded_at FROM evidence LIMIT 0"
+                "SELECT id, topic, value, source, note, recorded_at, negated FROM evidence LIMIT 0"
             )
             snapshot.execute("PRAGMA journal_mode = DELETE")
 

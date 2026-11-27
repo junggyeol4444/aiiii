@@ -8,11 +8,16 @@ from .research import read_document
 
 
 FIELDS = {"주제": 200, "주장": 500, "출처": 500, "증거": 4000}
+JSON_FIELDS = FIELDS.keys() | {"부정"}
 MAX_OBSERVATIONS = 100
 TEXT_LABELS = ("주제", "출처", "관측")
 TOPIC_REFERENCES = ("이 주제", "그 주제", "해당 주제")
-TEXT_PREDICATE = re.compile(r"([은는이가]) (\S(?:.*\S)?)(?:이다|입니다)\.?")
-CLAUSE_BOUNDARY = re.compile(r"[.!?…](?: |$)")
+TEXT_PREDICATE = re.compile(r"([은는이가]) (\S(?:.*\S)?)(?:이다|입니다|([이가]) (?:아니다|아닙니다))\.?")
+CLAUSE_BOUNDARY = re.compile(r"[.!?…](?: |$)|[。！？]|(?<=[다요])[.!?]")
+UNSUPPORTED_NEGATION = re.compile(
+    r"(?<!\w)(?:(?:안|못)(?= )|"
+    r"(?:아니다|아닙니다|아닌|아님|아니(?:고|라(?:면|고|는)?|며|면|므로|어서|지만)|않\w*)(?!\w))"
+)
 
 
 def _unique_object(pairs):
@@ -48,10 +53,21 @@ def _parse_json_observations(content, path):
     observations = []
     for index, record in enumerate(records, start=1):
         location = f"{path}의 관측 {index}번"
-        if not isinstance(record, dict) or record.keys() != FIELDS.keys():
-            raise ValueError(f"{location}에 주제, 주장, 출처, 증거가 각각 필요합니다.")
-        observations.append(tuple(_normalize_field(record[field], field, location) for field in FIELDS))
+        if not isinstance(record, dict) or not FIELDS.keys() <= record.keys() <= JSON_FIELDS:
+            raise ValueError(f"{location}에 주제, 주장, 출처, 증거가 필요하며 부정을 추가할 수 있습니다.")
+        negated = record.get("부정", False)
+        if not isinstance(negated, bool):
+            raise ValueError(f"{location}의 부정은 true 또는 false여야 합니다.")
+        values = tuple(_normalize_field(record[field], field, location) for field in FIELDS)
+        observations.append((*values, negated))
     return observations
+
+
+def _has_final_consonant(phrase):
+    syllable = ord(phrase[-1])
+    if 0xAC00 <= syllable <= 0xD7A3:
+        return (syllable - 0xAC00) % 28 != 0
+    return None
 
 
 def _parse_text_record(lines, location, previous_topic):
@@ -75,18 +91,24 @@ def _parse_text_record(lines, location, previous_topic):
         raise ValueError(f"{location}의 관측 문장이 주제와 일치하지 않습니다.")
     predicate = TEXT_PREDICATE.fullmatch(sentence[len(subject):])
     if predicate is None:
-        raise ValueError(f"{location}의 관측 문장은 주제와 조사 뒤에 주장과 ‘이다’ 또는 ‘입니다’가 필요합니다.")
-    particle, claim = predicate.groups()
-    last_character = ord(subject[-1])
-    if 0xAC00 <= last_character <= 0xD7A3:
-        has_final_consonant = (last_character - 0xAC00) % 28 != 0
-        expected_particles = "은이" if has_final_consonant else "는가"
-        if particle not in expected_particles:
-            raise ValueError(f"{location}의 관측 문장에서 주제의 받침에 맞는 조사를 사용하세요.")
+        raise ValueError(
+            f"{location}의 관측 문장은 주제와 조사 뒤에 ‘주장이다/입니다’ "
+            "또는 ‘주장이/가 아니다/아닙니다’ 형식이 필요합니다."
+        )
+    particle, claim, negative_particle = predicate.groups()
+    subject_has_final = _has_final_consonant(subject)
+    if subject_has_final is not None and particle not in ("은이" if subject_has_final else "는가"):
+        raise ValueError(f"{location}의 관측 문장에서 주제의 받침에 맞는 조사를 사용하세요.")
     if CLAUSE_BOUNDARY.search(claim):
         raise ValueError(f"{location}에는 관측 문장을 하나만 입력하세요.")
+    if UNSUPPORTED_NEGATION.search(claim):
+        raise ValueError(f"{location}에서 부정은 ‘주장이/가 아니다/아닙니다’ 형식으로만 입력하세요.")
     claim = _normalize_field(claim, "주장", location)
-    return topic, claim, source, sentence
+    claim_has_final = _has_final_consonant(claim)
+    negated = negative_particle is not None
+    if negated and claim_has_final is not None and negative_particle != ("이" if claim_has_final else "가"):
+        raise ValueError(f"{location}의 부정 문장에서 주장의 받침에 맞는 이/가를 사용하세요.")
+    return topic, claim, source, sentence, negated
 
 
 def _parse_text_observations(content, path):
