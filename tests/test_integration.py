@@ -261,6 +261,57 @@ class TestProgramIntegrationTest(ProgramIntegrationCase):
         self.assertIn("중앙 광장 | 지도 | 도서관 위치는 중앙 광장입니다.", history)
         self.assertIn("중앙 광장 | 운영기관 | 도서관 위치가 중앙 광장이다.", history)
 
+    def test_autonomous_learning_resolves_text_references_to_latest_explicit_topic(self):
+        document = self.workspace / "문맥.txt"
+        document.write_text(
+            "주제: 공원 운영\n출처: 관리소\n관측: 공원 운영은 중단입니다.\n\n"
+            "출처: 안내판\n관측: 이 주제는 중단이다.\n\n"
+            "주제: 도서관 위치\n출처: 지도\n관측: 도서관 위치는 중앙 광장입니다.\n\n"
+            "출처: 운영기관\n관측: 그 주제는 중앙 광장입니다.\n\n"
+            "출처: 현장\n관측: 해당 주제는 중앙 광장이다.\n",
+            encoding="utf-8",
+        )
+
+        self.run_cli("자율학습", "--자료", str(document), "--계속")
+        park_history = self.run_cli("기록", "공원 운영").stdout
+        self.assertEqual(len(park_history.splitlines()), 2)
+        self.assertIn("중단 | 안내판 | 이 주제는 중단이다.", park_history)
+        library_history = self.run_cli("기록", "도서관 위치").stdout
+        self.assertEqual(len(library_history.splitlines()), 3)
+        self.assertIn("중앙 광장 | 운영기관 | 그 주제는 중앙 광장입니다.", library_history)
+        self.assertIn("중앙 광장 | 현장 | 해당 주제는 중앙 광장이다.", library_history)
+        self.assertIn("중앙 광장 (출처 3개)", self.run_cli("판단", "도서관 위치").stdout)
+
+    def test_autonomous_learning_rejects_unresolved_or_unmarked_text_references(self):
+        document = self.workspace / "문맥.txt"
+        explicit = "주제: 공원 운영\n출처: 관리소\n관측: 공원 운영은 중단입니다.\n"
+        unresolved = "출처: 안내판\n관측: 이 주제는 중단입니다.\n"
+        other_topic = "출처: 현장\n관측: 도서관 위치는 중앙 광장입니다.\n"
+        self.run_cli("기록", "공원 운영")
+        baseline = self.database.read_bytes()
+
+        for content in (unresolved + "\n" + explicit, explicit + "\n" + other_topic):
+            with self.subTest(content=content):
+                document.write_text(content, encoding="utf-8")
+                self.run_cli("자율학습", "--자료", str(document), "--계속", expected_status=1)
+                self.assertEqual(self.database.read_bytes(), baseline)
+
+    def test_autonomous_learning_does_not_resolve_text_references_across_files(self):
+        first = self.workspace / "첫째.txt"
+        first.write_text(
+            "주제: 공원 운영\n출처: 관리소\n관측: 공원 운영은 중단입니다.\n",
+            encoding="utf-8",
+        )
+        second = self.workspace / "둘째.txt"
+        second.write_text("출처: 안내판\n관측: 그 주제는 중단입니다.\n", encoding="utf-8")
+        self.run_cli("기록", "공원 운영")
+        baseline = self.database.read_bytes()
+
+        self.run_cli(
+            "자율학습", "--자료", str(first), "--자료", str(second), "--계속", expected_status=1,
+        )
+        self.assertEqual(self.database.read_bytes(), baseline)
+
     def test_autonomous_learning_rejects_invalid_text_before_writing(self):
         document = self.workspace / "관측.txt"
         first_record = "주제: 공원 운영\n출처: 관리소\n관측: 공원 운영은 중단입니다.\n\n"

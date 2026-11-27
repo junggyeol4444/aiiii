@@ -10,6 +10,7 @@ from .research import read_document
 FIELDS = {"주제": 200, "주장": 500, "출처": 500, "증거": 4000}
 MAX_OBSERVATIONS = 100
 TEXT_LABELS = ("주제", "출처", "관측")
+TOPIC_REFERENCES = ("이 주제", "그 주제", "해당 주제")
 TEXT_PREDICATE = re.compile(r"([은는이가]) (\S(?:.*\S)?)(?:이다|입니다)\.?")
 CLAUSE_BOUNDARY = re.compile(r"[.!?…](?: |$)")
 
@@ -53,23 +54,30 @@ def _parse_json_observations(content, path):
     return observations
 
 
-def _parse_text_record(lines, location):
+def _parse_text_record(lines, location, previous_topic):
     fields = [line.strip().partition(":") for line in lines]
-    if (
-        tuple(label for label, _, _ in fields) != TEXT_LABELS
-        or any(not separator for _, separator, _ in fields)
-    ):
+    labels = tuple(label for label, _, _ in fields)
+    if any(not separator for _, separator, _ in fields) or labels not in (TEXT_LABELS, TEXT_LABELS[1:]):
         raise ValueError(f"{location}에 주제, 출처, 관측 줄이 이 순서대로 필요합니다.")
-    topic = _normalize_field(fields[0][2], "주제", location)
-    source = _normalize_field(fields[1][2], "출처", location)
-    sentence = _normalize_field(fields[2][2], "증거", location)
-    if not sentence.startswith(topic):
+    source = _normalize_field(fields[-2][2], "출처", location)
+    sentence = _normalize_field(fields[-1][2], "증거", location)
+    if labels == TEXT_LABELS:
+        topic = _normalize_field(fields[0][2], "주제", location)
+        subject = topic
+    else:
+        if previous_topic is None:
+            raise ValueError(f"{location}의 관측이 참조할 앞 주제가 같은 파일에 없습니다.")
+        topic = previous_topic
+        subject = next((name for name in TOPIC_REFERENCES if sentence.startswith(name)), None)
+        if subject is None:
+            raise ValueError(f"{location}에서 주제 줄을 생략할 때는 ‘이 주제’, ‘그 주제’ 또는 ‘해당 주제’를 쓰세요.")
+    if not sentence.startswith(subject):
         raise ValueError(f"{location}의 관측 문장이 주제와 일치하지 않습니다.")
-    predicate = TEXT_PREDICATE.fullmatch(sentence[len(topic):])
+    predicate = TEXT_PREDICATE.fullmatch(sentence[len(subject):])
     if predicate is None:
         raise ValueError(f"{location}의 관측 문장은 주제와 조사 뒤에 주장과 ‘이다’ 또는 ‘입니다’가 필요합니다.")
     particle, claim = predicate.groups()
-    last_character = ord(topic[-1])
+    last_character = ord(subject[-1])
     if 0xAC00 <= last_character <= 0xD7A3:
         has_final_consonant = (last_character - 0xAC00) % 28 != 0
         expected_particles = "은이" if has_final_consonant else "는가"
@@ -83,6 +91,7 @@ def _parse_text_record(lines, location):
 
 def _parse_text_observations(content, path):
     observations = []
+    previous_topic = None
     blocks = groupby(content.splitlines(), key=lambda line: bool(line.strip()))
     for nonblank, lines in blocks:
         if not nonblank:
@@ -90,7 +99,9 @@ def _parse_text_observations(content, path):
         if len(observations) == MAX_OBSERVATIONS:
             raise ValueError(f"관측 텍스트에는 최대 {MAX_OBSERVATIONS}개를 입력할 수 있습니다 ({path}).")
         location = f"{path}의 관측 {len(observations) + 1}번"
-        observations.append(_parse_text_record(lines, location))
+        record = _parse_text_record(lines, location, previous_topic)
+        observations.append(record)
+        previous_topic = record[0]
     if not observations:
         raise ValueError(f"관측 텍스트에 최소 1개의 관측이 필요합니다 ({path}).")
     return observations
