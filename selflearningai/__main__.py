@@ -37,10 +37,8 @@ def main():
         path = args.database
         if path is None:
             path = legacy if not default.exists() and legacy.is_file() else default
-    memory = Memory(path, read_only=not test_mode)
+    memory = Memory(path, test_mode=test_mode)
     try:
-        if args.command in ("학습", "인용학습"):
-            memory.require_learning()
         memory.initialize()
         if args.command == "학습":
             entry = memory.learn(args.주제, args.주장, args.출처, args.증거)
