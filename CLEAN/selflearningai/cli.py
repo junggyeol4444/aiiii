@@ -3,8 +3,11 @@ import sqlite3
 from pathlib import Path
 
 from .memory import CLEAN_DATABASE_NAME, Memory, normalize
-from .observations import load_observations
+from .observations import MAX_OBSERVATIONS, load_observations
 from .research import display_text, find_passages, verify_passage
+
+
+MAX_OBSERVATION_FILES = 8
 
 
 def main(*, test_mode):
@@ -29,7 +32,13 @@ def main(*, test_mode):
     cite.add_argument("줄번호", type=int)
     cite.add_argument("sha256", metavar="SHA-256", nargs="?")
     automatic = commands.add_parser("자율학습", help="관측 자료에서 주제를 선택해 학습")
-    automatic.add_argument("--자료", dest="observations", required=True, metavar="JSON")
+    automatic.add_argument(
+        "--자료", dest="documents", action="append", required=True, metavar="파일",
+        help="관측 파일을 지정합니다. 여러 번 사용할 수 있습니다.",
+    )
+    automatic.add_argument(
+        "--계속", dest="continuous", action="store_true", help="자료에 남은 주제를 순서대로 학습",
+    )
     args = parser.parse_args()
     program_dir = Path(__file__).resolve().parents[1]
     path = program_dir / CLEAN_DATABASE_NAME
@@ -42,16 +51,25 @@ def main(*, test_mode):
     memory = Memory(path, test_mode=test_mode)
     try:
         if args.command == "자율학습":
-            observations = load_observations(args.observations)
+            if len(args.documents) > MAX_OBSERVATION_FILES:
+                raise ValueError(f"관측 파일은 한 번에 최대 {MAX_OBSERVATION_FILES}개까지 지정할 수 있습니다.")
+            observations = []
+            for document in args.documents:
+                observations.extend(load_observations(document))
+                if len(observations) > MAX_OBSERVATIONS:
+                    raise ValueError(f"관측은 모든 자료를 합쳐 최대 {MAX_OBSERVATIONS}건까지 지정할 수 있습니다.")
             memory.initialize()
-            outcome = memory.learn_from_observations(observations)
-            if outcome is None:
-                print("학습할 새 관측이 없습니다.")
-            else:
+            while True:
+                outcome = memory.learn_from_observations(observations)
+                if outcome is None:
+                    print("학습할 새 관측이 없습니다.")
+                    return
                 topic, count = outcome
                 print(f"선택한 학습 주제 — {topic}")
                 print(f"관측 {count}건을 통합하고 잠갔습니다.")
-            return
+                if not args.continuous:
+                    return
+                observations = [record for record in observations if record[0] != topic]
 
         memory.initialize()
         if args.command == "학습":
