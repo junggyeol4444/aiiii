@@ -113,6 +113,42 @@ class MemoryIntegrationTest(unittest.TestCase):
             with self.assertRaisesRegex(sqlite3.IntegrityError, "잠긴 증거"):
                 connection.execute("DELETE FROM evidence")
 
+    def test_exploration_reprioritizes_after_source_correction(self):
+        def explore():
+            return self.run_cli("탐구").stdout
+
+        self.assertIn("주제를 찾지 못했습니다", explore())
+        self.run_cli("학습", "공원 운영", "개방", "현장 관찰", "첫 방문")
+        self.run_cli("학습", "공원 운영", "폐쇄", "관리소", "첫 공지")
+        self.run_cli("학습", "도서관 운영", "개방", "현장 관찰", "첫 방문")
+
+        candidate = explore()
+        self.assertIn("다음 탐구 주제 — 공원 운영", candidate)
+        self.assertIn("‘개방’ 1개, ‘폐쇄’ 1개", candidate)
+        self.assertIn("확인할 질문", candidate)
+
+        self.run_cli("학습", "공원 운영", "개방", "관리소", "정정 공지")
+        candidate = explore()
+        self.assertIn("다음 탐구 주제 — 도서관 운영", candidate)
+        self.assertIn("출처가 1개뿐입니다", candidate)
+        self.assertIn("폐쇄 | 관리소 | 첫 공지", self.run_cli("기록", "공원 운영").stdout)
+
+        self.run_cli("학습", "도서관 운영", "개방", "관리소", "운영 안내")
+        self.assertIn("주제를 찾지 못했습니다", explore())
+
+    def test_exploration_prefers_ties_then_smaller_gaps(self):
+        for topic, leading, other in (
+            ("근소한 차이", 2, 1),
+            ("큰 차이", 3, 1),
+            ("동률", 1, 1),
+        ):
+            for value, count in (("찬성", leading), ("반대", other)):
+                for index in range(count):
+                    self.run_cli("학습", topic, value, f"{value} 출처 {index}", "관측 내용")
+        self.assertIn("다음 탐구 주제 — 동률", self.run_cli("탐구").stdout)
+        self.run_cli("학습", "동률", "찬성", "반대 출처 0", "정정")
+        self.assertIn("다음 탐구 주제 — 근소한 차이", self.run_cli("탐구").stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

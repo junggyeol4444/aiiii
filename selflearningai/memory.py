@@ -125,6 +125,46 @@ class Memory:
                 (topic,),
             ).fetchall()
 
+    def next_exploration(self):
+        with closing(sqlite3.connect(self.path)) as connection:
+            return connection.execute(
+                """
+                WITH latest AS (
+                    SELECT MAX(id) AS id FROM evidence GROUP BY topic, source
+                ),
+                support AS (
+                    SELECT topic, value, COUNT(*) AS votes, MAX(evidence.id) AS newest
+                    FROM latest JOIN evidence ON evidence.id = latest.id
+                    GROUP BY topic, value
+                ),
+                ranked AS (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY topic ORDER BY votes DESC, value
+                           ) AS position
+                    FROM support
+                ),
+                topics AS (
+                    SELECT topic, SUM(votes) AS sources, MAX(newest) AS newest,
+                           MAX(CASE WHEN position = 1 THEN value END) AS leading_value,
+                           MAX(CASE WHEN position = 2 THEN value END) AS other_value,
+                           MAX(CASE WHEN position = 1 THEN votes END) AS leading_votes,
+                           MAX(CASE WHEN position = 2 THEN votes END) AS other_votes
+                    FROM ranked GROUP BY topic
+                )
+                SELECT topic, sources, leading_value, other_value, leading_votes, other_votes
+                FROM topics
+                WHERE other_votes IS NOT NULL OR sources = 1
+                ORDER BY CASE
+                             WHEN leading_votes = other_votes THEN 0
+                             WHEN other_votes IS NOT NULL THEN 1
+                             ELSE 2
+                         END,
+                         leading_votes - other_votes, newest DESC, topic
+                LIMIT 1
+                """
+            ).fetchone()
+
     def history(self, topic):
         topic = normalize(topic, "주제", 200)
         with closing(sqlite3.connect(self.path)) as connection:
