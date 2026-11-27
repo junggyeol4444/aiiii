@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class DistributionIntegrationTest(unittest.TestCase):
     def run_program(self, program, *arguments, cwd, expected_status=0):
         result = subprocess.run(
-            [sys.executable, str(program), *arguments],
+            [sys.executable, "-I", "-S", str(program), *arguments],
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -22,7 +22,7 @@ class DistributionIntegrationTest(unittest.TestCase):
         self.assertEqual(result.returncode, expected_status, result.stderr)
         return result
 
-    def test_archives_have_separate_launchers_and_memories(self):
+    def test_archives_have_standalone_programs_and_separate_memories(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             topic = "관측소 운영"
@@ -43,13 +43,6 @@ class DistributionIntegrationTest(unittest.TestCase):
                 cwd=workspace,
             )
 
-            shared = {
-                "README.md",
-                "selflearningai/__init__.py",
-                "selflearningai/cli.py",
-                "selflearningai/memory.py",
-                "selflearningai/research.py",
-            }
             test_workspace = workspace / "test"
             clean_workspace = workspace / "clean"
             with (
@@ -58,11 +51,17 @@ class DistributionIntegrationTest(unittest.TestCase):
             ):
                 self.assertCountEqual(
                     test_zip.namelist(),
-                    shared | {"selflearningai_test.py", "test.sqlite3", "evaluation/result.txt"},
+                    {"README.md", "selflearningai_test.py", "test.sqlite3", "evaluation/result.txt"},
                 )
-                self.assertCountEqual(clean_zip.namelist(), shared | {"selflearningai_clean.py"})
-                for path in shared:
-                    self.assertEqual(test_zip.read(path), clean_zip.read(path), path)
+                self.assertCountEqual(clean_zip.namelist(), {"README.md", "selflearningai_clean.py"})
+                self.assertEqual(
+                    test_zip.read("selflearningai_test.py"),
+                    (ROOT / "selflearningai_test.py").read_bytes(),
+                )
+                self.assertEqual(
+                    clean_zip.read("selflearningai_clean.py"),
+                    (ROOT / "selflearningai_clean.py").read_bytes(),
+                )
                 test_zip.extractall(test_workspace)
                 clean_zip.extractall(clean_workspace)
 
