@@ -158,14 +158,19 @@ class CleanProgramIntegrationTest(ProgramIntegrationCase):
 
 
 class TestProgramIntegrationTest(ProgramIntegrationCase):
-    def learn_observations(self, *observations, expected_status=0):
+    def write_observations(self, *observations):
         fields = ("주제", "주장", "출처", "증거")
         document = self.workspace / "관측.json"
         document.write_text(
             json.dumps([dict(zip(fields, observation)) for observation in observations], ensure_ascii=False),
             encoding="utf-8",
         )
-        return self.run_cli("자율학습", "--자료", str(document), expected_status=expected_status)
+        return document
+
+    def learn_observations(self, *observations, continuous=False, expected_status=0):
+        document = self.write_observations(*observations)
+        options = ("--계속",) if continuous else ()
+        return self.run_cli("자율학습", "--자료", str(document), *options, expected_status=expected_status)
 
     def test_autonomous_learning_selects_one_topic_by_distinct_sources_then_name(self):
         park = "가로수길 공원 운영"
@@ -209,6 +214,110 @@ class TestProgramIntegrationTest(ProgramIntegrationCase):
         self.assertIn("지난 공지는 개방이었다.", self.run_cli("기록", tie).stdout)
         self.assertEqual(len(self.run_cli("기록", singleton).stdout.splitlines()), 1)
         self.assertIn("저장된 증거가 없습니다", self.run_cli("기록", new_topic).stdout)
+
+    def test_autonomous_learning_continues_until_all_topics_are_learned(self):
+        uncertain = "공원의 야간 개방"
+        strongest = "산책로 운영"
+        final = "도서관 운영"
+        self.run_cli("학습", uncertain, "개방", "이전 공지", "처음에는 개방으로 안내했다.")
+        observations = (
+            (final, "휴관", "도서관", "휴관 안내가 붙었다."),
+            (strongest, "운영", "현장", "산책로 입구가 열렸다."),
+            (strongest, "운영", "관리소", "운영을 공지했다."),
+            (uncertain, "폐쇄", "이전 공지", "폐쇄로 공지가 정정됐다."),
+        )
+
+        output = self.learn_observations(*observations, continuous=True).stdout.splitlines()
+        prefix = "선택한 학습 주제 — "
+        topics = [line.removeprefix(prefix) for line in output if line.startswith(prefix)]
+        self.assertEqual(topics, [uncertain, strongest, final])
+        self.assertIn("학습할 새 관측이 없습니다", output[-1])
+        self.assertIn("잠정 판단 — 폐쇄", self.run_cli("판단", uncertain).stdout)
+        self.assertIn("운영 (출처 2개)", self.run_cli("판단", strongest).stdout)
+        self.assertIn("잠정 판단 — 휴관", self.run_cli("판단", final).stdout)
+
+        baseline = self.database.read_bytes()
+        replay = self.learn_observations(*observations, continuous=True).stdout
+        self.assertNotIn(prefix, replay)
+        self.assertIn("학습할 새 관측이 없습니다", replay)
+        self.assertEqual(self.database.read_bytes(), baseline)
+
+    def test_autonomous_learning_extracts_claims_from_korean_text_records(self):
+        document = self.workspace / "관측.TXT"
+        document.write_text(
+            "주제: 공원 운영\n출처: 관리소\n관측: 공원  운영은   중단입니다.\n\n"
+            "주제: 공원 운영\n출처: 안내판\n관측: 공원 운영이 중단이다.\n\n"
+            "주제: 도서관 위치\n출처: 지도\n관측: 도서관 위치는 중앙 광장입니다.\n\n"
+            "주제: 도서관 위치\n출처: 운영기관\n관측: 도서관 위치가 중앙 광장이다.\n",
+            encoding="utf-8",
+        )
+        self.run_cli("자율학습", "--자료", str(document), "--계속")
+        self.assertIn("중단 (출처 2개)", self.run_cli("판단", "공원 운영").stdout)
+        self.assertIn("중앙 광장 (출처 2개)", self.run_cli("판단", "도서관 위치").stdout)
+        history = self.run_cli("기록", "공원 운영").stdout
+        self.assertIn("중단 | 관리소 | 공원 운영은 중단입니다.", history)
+        self.assertIn("중단 | 안내판 | 공원 운영이 중단이다.", history)
+        history = self.run_cli("기록", "도서관 위치").stdout
+        self.assertIn("중앙 광장 | 지도 | 도서관 위치는 중앙 광장입니다.", history)
+        self.assertIn("중앙 광장 | 운영기관 | 도서관 위치가 중앙 광장이다.", history)
+
+    def test_autonomous_learning_rejects_invalid_text_before_writing(self):
+        document = self.workspace / "관측.txt"
+        first_record = "주제: 공원 운영\n출처: 관리소\n관측: 공원 운영은 중단입니다.\n\n"
+        second_header = "주제: 도서관 위치\n출처: 운영기관\n"
+        self.run_cli("기록", "공원 운영")
+        baseline = self.database.read_bytes()
+
+        for invalid in (
+            "설명: 도서관 위치는 중앙 광장입니다.",
+            "관측: 도서관 위치를 중앙 광장으로 옮겨라.",
+            "관측: 어린이 도서관 위치는 중앙 광장입니다.",
+            "관측: 도서관 위치은 중앙 광장입니다.",
+            "관측: 도서관 위치이 중앙 광장입니다.",
+            "관측: 도서관 위치는 중앙 광장입니다. 공원은 동쪽입니다.",
+        ):
+            with self.subTest(invalid=invalid):
+                document.write_text(first_record + second_header + invalid + "\n", encoding="utf-8")
+                self.run_cli("자율학습", "--자료", str(document), "--계속", expected_status=None)
+                self.assertEqual(self.database.read_bytes(), baseline)
+
+    def test_autonomous_learning_merges_observations_from_json_and_text_files(self):
+        topic = "공원 운영"
+        json_document = self.write_observations((topic, "중단", "관리소", "정비 일정을 공지했다."))
+        text_document = self.workspace / "현장.txt"
+        text_document.write_text(
+            "주제: 공원 운영\n출처: 현장 관찰\n관측: 공원 운영은 중단입니다.\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_cli("자율학습", "--자료", str(json_document), "--자료", str(text_document), "--계속")
+        self.assertEqual(result.stdout.count(f"선택한 학습 주제 — {topic}"), 1)
+        self.assertIn("중단 (출처 2개)", self.run_cli("판단", topic).stdout)
+        history = self.run_cli("기록", topic).stdout
+        self.assertIn("중단 | 관리소 | 정비 일정을 공지했다.", history)
+        self.assertIn("중단 | 현장 관찰 | 공원 운영은 중단입니다.", history)
+
+    def test_autonomous_learning_rejects_cross_file_conflicts_and_limit(self):
+        topic = "공원 운영"
+        text_document = self.workspace / "현장.txt"
+        text_document.write_text(
+            "주제: 공원 운영\n출처:  관리소 \n관측: 공원 운영은 중단입니다.\n",
+            encoding="utf-8",
+        )
+        self.run_cli("기록", topic)
+        baseline = self.database.read_bytes()
+        cases = {
+            "같은 출처의 충돌": [(topic, "개방", "관리소", "운영을 공지했다.")],
+            "합산 항목 수 상한": [(topic, "중단", f"현장 {index}", "운영이 중단됐다.") for index in range(100)],
+        }
+        for label, observations in cases.items():
+            with self.subTest(case=label):
+                json_document = self.write_observations(*observations)
+                self.run_cli(
+                    "자율학습", "--자료", str(json_document), "--자료", str(text_document), "--계속",
+                    expected_status=None,
+                )
+                self.assertEqual(self.database.read_bytes(), baseline)
 
     def test_autonomous_learning_ignores_historical_replay(self):
         topic = "관측소 운영"

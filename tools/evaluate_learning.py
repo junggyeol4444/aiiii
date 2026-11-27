@@ -38,6 +38,13 @@ def evaluate(directory, *, program=ROOT / "TEST" / "run.py"):
         encoding="utf-8",
     )
     automatic = ("자율학습", "--자료", str(observation_file.relative_to(directory)))
+    text_topic = "가상 도서실"
+    text_observation = evaluation / "도서실 관측.txt"
+    text_observation.write_text(
+        f"주제: {text_topic}\n출처: 안내문\n관측: {text_topic}은 개방입니다.\n",
+        encoding="utf-8",
+    )
+    text_argument = str(text_observation.relative_to(directory))
     database = directory / "test.sqlite3"
     steps = [
         (("학습", TOPIC, "운영", "예전 공지", "야간 운영이 예고됐습니다."), "증거 1번"),
@@ -48,11 +55,11 @@ def evaluate(directory, *, program=ROOT / "TEST" / "run.py"):
         (("학습", TOPIC, "중단", "현장 확인", "관측소 출입구가 닫혀 있었습니다."), "증거 3번"),
         (("판단", TOPIC), "잠정 판단 — 중단"),
         (("기록", TOPIC), "운영 | 예전 공지 | 야간 운영이 예고됐습니다."),
-        (automatic, f"선택한 학습 주제 — {TOPIC}"),
+        ((*automatic, "--자료", text_argument, "--계속"), "학습할 새 관측이 없습니다."),
         (("판단", TOPIC), "중단 (출처 3개)"),
-        (automatic, f"선택한 학습 주제 — {next_topic}"),
         (("판단", next_topic), "운영 (출처 2개)"),
         (automatic, "학습할 새 관측이 없습니다."),
+        (("기록", text_topic), f"개방 | 안내문 | {text_topic}은 개방입니다."),
     ]
     (evaluation / "시나리오.json").write_text(
         json.dumps(
